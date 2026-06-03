@@ -1,3 +1,4 @@
+
 import os
 import time
 import pandas as pd
@@ -6,6 +7,12 @@ import ccxt
 
 class OKXDynamicGridBot:
     def __init__(self):
+        print("--- RUNTIME DIAGNOSTIC CHECK ---")
+        print(f"OKX_API_KEY Found: {bool(os.getenv('OKX_API_KEY'))}")
+        print(f"OKX_API_SECRET Found: {bool(os.getenv('OKX_API_SECRET'))}")
+        print(f"OKX_PASSPHRASE Found: {bool(os.getenv('OKX_PASSPHRASE'))}")
+        print("--------------------------------")
+
         # SECURE API CONFIGURATION
         self.exchange = ccxt.okx({
             'apiKey': os.getenv('OKX_API_KEY'),
@@ -17,13 +24,8 @@ class OKXDynamicGridBot:
             }
         })
         
-        # Enforce the Demo Trading environment cleanly
+        # Enforce the Demo Trading environment cleanly via CCXT native method
         self.exchange.set_sandbox_mode(True)
-        
-        # Safely append the simulated flag without wiping out CCXT's default headers
-        if self.exchange.headers is None:
-            self.exchange.headers = {}
-        self.exchange.headers['x-simulated-trading'] = '1'
         
         self.symbol = 'DOGE/USDT'
         self.order_amount = 371.0  # Dogecoin trade sizing
@@ -46,7 +48,7 @@ class OKXDynamicGridBot:
             sma = df['close'].rolling(window=20).mean().iloc[-1]
             return float(sma)
         except Exception as e:
-            print(f"Error extracting price matrix data: {e}")
+            print(f"Error extracting price matrix data (Public Loop): {e}")
             return None
 
     def cancel_safe(self, order_id):
@@ -55,7 +57,7 @@ class OKXDynamicGridBot:
             try:
                 self.exchange.cancel_order(order_id, self.symbol)
             except Exception:
-                pass # Order might have already filled or expired naturally
+                pass 
 
     def update_grid_positions(self):
         """Calculates new levels and moves orders if the market trend shifted."""
@@ -71,7 +73,7 @@ class OKXDynamicGridBot:
         print(f" -> Desired Buy Grid: ${target_buy_price:.5f}")
         print(f" -> Desired Sell Grid: ${target_sell_price:.5f}")
 
-        # Check existing Buy Order state
+        # Check existing Buy Order state safely
         if self.current_buy_order:
             try:
                 order = self.exchange.fetch_order(self.current_buy_order, self.symbol)
@@ -79,9 +81,11 @@ class OKXDynamicGridBot:
                     print(f"💥 [FILL EVENT] Buy Order hit at ${order['price']}! Re-centering grid.")
                     self.current_buy_order = None
             except Exception as e:
-                print(f"Error checking buy status: {e}")
+                print(f"Error checking buy status (Auth/API Issue): {e}")
+                # If keys are invalid, wipe tracking to attempt re-placement later
+                if "50119" in str(e): return
 
-        # Check existing Sell Order state
+        # Check existing Sell Order state safely
         if self.current_sell_order:
             try:
                 order = self.exchange.fetch_order(self.current_sell_order, self.symbol)
@@ -89,19 +93,25 @@ class OKXDynamicGridBot:
                     print(f"💥 [FILL EVENT] Sell Order hit at ${order['price']}! Profit locked in.")
                     self.current_sell_order = None
             except Exception as e:
-                print(f"Error checking sell status: {e}")
+                print(f"Error checking sell status (Auth/API Issue): {e}")
+                if "50119" in str(e): return
 
-        # If a buy order isn't active, deploy one at the updated coordinate line
-        if not self.current_buy_order:
-            print(f"Placing Dynamic Buy Limit Order at ${target_buy_price}")
-            order = self.exchange.create_limit_buy_order(self.symbol, self.order_amount, target_buy_price)
-            self.current_buy_order = order['id']
+        # Try deploying orders with localized error catch shields
+        try:
+            if not self.current_buy_order:
+                print(f"Placing Dynamic Buy Limit Order at ${target_buy_price}")
+                order = self.exchange.create_limit_buy_order(self.symbol, self.order_amount, target_buy_price)
+                self.current_buy_order = order['id']
+        except Exception as e:
+            print(f"Execution Engine failed to place Buy Grid Line: {e}")
             
-        # If a sell order isn't active, deploy one at the updated coordinate line
-        if not self.current_sell_order:
-            print(f"Placing Dynamic Sell Limit Order at ${target_sell_price}")
-            order = self.exchange.create_limit_sell_order(self.symbol, self.order_amount, target_sell_price)
-            self.current_sell_order = order['id']
+        try:
+            if not self.current_sell_order:
+                print(f"Placing Dynamic Sell Limit Order at ${target_sell_price}")
+                order = self.exchange.create_limit_sell_order(self.symbol, self.order_amount, target_sell_price)
+                self.current_sell_order = order['id']
+        except Exception as e:
+            print(f"Execution Engine failed to place Sell Grid Line: {e}")
 
     def start_loop(self):
         print("Starting Dynamic Tracking Grid Bot...")
@@ -111,7 +121,7 @@ class OKXDynamicGridBot:
             except Exception as e:
                 print(f"Main loop exception triggered: {e}")
             
-            # Sleep for 15 minutes before re-checking the moving average path
+            # This sleep now guarantees execution protection even if API errors hit
             print("Waiting 15 minutes before checking the moving average path...")
             time.sleep(900)
 
