@@ -23,113 +23,154 @@ class OKXNativeClassicGridBot:
             }
         })
         
+        # Keep sandbox mode active for validation safety
         self.exchange.set_sandbox_mode(True)
         self.symbol = 'DOGE/USDT'
         
         # EXACT MATCH NATIVE OKX BOT CONFIGURATION
-        self.total_bot_budget = 100.0   # Total Investment: 100.0000 USD
-        self.lower_bound = 0.08847      # Bottom of the grid range
-        self.upper_bound = 0.09211      # Top of the grid range
-        self.grid_count = 3             # Grid lines: 3
+        self.total_bot_budget = 100.0   # Total Investment: $100.00
+        self.lower_bound = 0.08847      # Bottom of grid range
+        self.upper_bound = 0.09211      # Top of grid range
+        self.grid_count = 3             # Total horizontal lines in matrix
         
-        # Calculate standard allocation blocks ($100 / 2 intervals = $50 per grid line)
-        self.capital_per_grid = self.total_bot_budget / (self.grid_count - 1)
+        # Calculate the exact mathematical spacing grid geometry
+        self.grid_prices = self.calculate_grid_prices()
+        self.capital_per_grid = self.total_bot_budget / len(self.grid_prices)
         
-        # SELF-CONTAINED INTERNAL LEDGER ENGINE
-        self.bot_cash = 100.0           # Local initial fiat tracking
-        self.bot_doge = 0.0             # Local initial token storage tracker
+        # Tracking dictionaries for simultaneous live limit positions
+        self.active_buy_orders = {}   # structure: {price: order_id}
+        self.active_sell_orders = {}  # structure: {price: order_id}
         
-        # Fixed execution targets calculated at boot sequence
-        self.buy_target_price = self.lower_bound
-        self.sell_target_price = self.upper_bound
-        
-        # Order Tracking Slots
-        self.current_buy_order = None
-        self.current_sell_order = None
+        # Initial Balance State Seeding
+        self.bootstrap_initial_balances()
 
-    def cancel_safe(self, order_id):
-        """Helper to drop a trace block safely."""
-        if order_id:
+    def calculate_grid_prices(self):
+        """Generates the array of exact pricing intervals for the grid matrix."""
+        prices = []
+        step = (self.upper_bound - self.lower_bound) / (self.grid_count - 1)
+        for i in range(self.grid_count):
+            price = self.lower_bound + (step * i)
+            prices.append(round(price, 5))
+        print(f"Generated Grid Price Structure Matrix: {prices}")
+        return prices
+
+    def bootstrap_initial_balances(self):
+        """Mimics OKX bot initialization by buying 50% asset inventory at market on boot."""
+        print("\n--- INITIALIZING GRID BALANCES (OKX STYLE SEEDING) ---")
+        try:
+            ticker = self.exchange.fetch_ticker(self.symbol)
+            current_price = ticker['last']
+            print(f"Current DOGE Market Spot Price: ${current_price:.5f}")
+            
+            # Spend half the budget immediately on a market order to balance inventory
+            seed_fiat_allocation = self.total_bot_budget / 2.0
+            approx_tokens = round(seed_fiat_allocation / current_price, 1)
+            
+            print(f"Executing initial balance allocation: Buying {approx_tokens} DOGE at market...")
+            # Un-comment the line below when migrating from paper testing to production
+            # order = self.exchange.create_market_buy_order(self.symbol, approx_tokens)
+            
+            # Setup localized internal ledger accounts based on the execution seed split
+            self.bot_cash = self.total_bot_budget - seed_fiat_allocation
+            self.bot_doge = approx_tokens
+            print(f"Initialization Seed Complete! Ledger Ready.")
+        except Exception as e:
+            print(f"🚨 Failed to execute initialization balancing: {e}")
+            print("Falling back to safe baseline asset state defaults.")
+            self.bot_cash = 100.0
+            self.bot_doge = 0.0
+
+    def sync_and_check_fills(self):
+        """Scans all active orders on the exchange to catch filled events simultaneously."""
+        # 1. SCAN LIVE BUY ORDERS
+        still_active_buys = {}
+        for price, order_id in self.active_buy_orders.items():
             try:
-                self.exchange.cancel_order(order_id, self.symbol)
-            except Exception:
-                pass 
-
-    def run_grid_cycle(self):
-        """Executes locked range grid arbitrage round-trips matching native logic."""
-        print(f"\n--- [NATIVE STYLE STATIC GRID RUNNER] ---")
-        print(f" -> Configured Upper Boundaries: ${self.upper_bound:.5f}")
-        print(f" -> Configured Lower Boundaries: ${self.lower_bound:.5f}")
-        print(f" -> INTERNAL BALANCE SHEET: ${self.bot_cash:.2f} Free Cash | {self.bot_doge:.2f} Accumulated DOGE")
-
-        # 1. PROCESS BUY FILLED EVENTS
-        if self.current_buy_order:
-            try:
-                order = self.exchange.fetch_order(self.current_buy_order, self.symbol)
+                order = self.exchange.fetch_order(order_id, self.symbol)
                 if order['status'] == 'closed':
                     filled_amount = float(order['filled'])
                     self.bot_doge += filled_amount
-                    print(f"💥 [FILL EVENT] Grid Buy Executed at ${order['price']}! Bought {filled_amount} DOGE.")
-                    self.current_buy_order = None
+                    print(f"💥 [FILL EVENT] Buy Grid Line Hit at ${price}! Acquired +{filled_amount} DOGE.")
+                else:
+                    still_active_buys[price] = order_id
             except Exception as e:
-                print(f"Error reviewing buy structure: {e}")
+                print(f"Error checking buy line ${price}: {e}")
+                still_active_buys[price] = order_id
+        self.active_buy_orders = still_active_buys
 
-        # 2. PROCESS SELL FILLED EVENTS (Profit Capture)
-        if self.current_sell_order:
+        # 2. SCAN LIVE SELL ORDERS
+        still_active_sells = {}
+        for price, order_id in self.active_sell_orders.items():
             try:
-                order = self.exchange.fetch_order(self.current_sell_order, self.symbol)
+                order = self.exchange.fetch_order(order_id, self.symbol)
                 if order['status'] == 'closed':
-                    sell_price = float(order['price'])
                     tokens_sold = float(order['filled'])
-                    usd_returned = round(sell_price * tokens_sold, 4)
-                    
-                    # Return original trade capital block + profit directly back to internal cash vault
+                    usd_returned = round(price * tokens_sold, 4)
                     self.bot_cash += usd_returned
-                    self.bot_doge -= tokens_sold
-                    
-                    print(f"💥 [FILL EVENT] Grid Sell Executed at ${sell_price}! Captured ${usd_returned:.2f} USDT.")
-                    self.current_sell_order = None
+                    print(f"💥 [FILL EVENT] Sell Grid Line Hit at ${price}! Locked In +${usd_returned:.2f} USDT.")
+                else:
+                    still_active_sells[price] = order_id
             except Exception as e:
-                print(f"Error reviewing sell structure: {e}")
+                print(f"Error checking sell line ${price}: {e}")
+                still_active_sells[price] = order_id
+        self.active_sell_orders = still_active_sells
 
-        # 3. CONSTRUCT BUY LINE LIMIT ORDER
-        if not self.current_buy_order:
-            if self.bot_cash >= self.capital_per_grid:
-                dynamic_buy_amount = round(self.capital_per_grid / self.buy_target_price, 1)
-                try:
-                    print(f"Placing Static Buy Order: Target {dynamic_buy_amount} DOGE at ${self.buy_target_price}")
-                    order = self.exchange.create_limit_buy_order(self.symbol, dynamic_buy_amount, self.buy_target_price)
-                    self.current_buy_order = order['id']
-                    
-                    # Freeze the allocation block internally
-                    self.bot_cash -= self.capital_per_grid
-                except Exception as e:
-                    print(f"API failed to plant Buy target line: {e}")
-            else:
-                print(f"⚠️ Buy Side Idle: Budget locked down inside active asset holdings.")
+    def deploy_missing_grid_lines(self):
+        """Maintains the grid matrix by planting limit orders on all unfilled rungs."""
+        try:
+            ticker = self.exchange.fetch_ticker(self.symbol)
+            current_price = ticker['last']
+        except Exception as e:
+            print(f"Error retrieving pricing data ticker metrics: {e}")
+            return
 
-        # 4. CONSTRUCT SELL LINE LIMIT ORDER
-        if not self.current_sell_order:
-            dynamic_sell_amount = round(self.capital_per_grid / self.sell_target_price, 1)
-            if self.bot_doge >= dynamic_sell_amount:
-                try:
-                    print(f"Placing Static Sell Order: Target {dynamic_sell_amount} DOGE at ${self.sell_target_price}")
-                    order = self.exchange.create_limit_sell_order(self.symbol, dynamic_sell_amount, self.sell_target_price)
-                    self.current_sell_order = order['id']
-                except Exception as e:
-                    print(f"API failed to plant Sell target line: {e}")
-            else:
-                print(f"📌 Sell Side Idle: Waiting for price to tap ${self.buy_target_price} to clear inventory constraints.")
+        for price in self.grid_prices:
+            # Drop down a Buy Limit if the grid target sits below current market price
+            if price < current_price:
+                if price not in self.active_buy_orders and price not in self.active_sell_orders:
+                    if self.bot_cash >= self.capital_per_grid:
+                        tokens_to_buy = round(self.capital_per_grid / price, 1)
+                        try:
+                            print(f"Placing Buy Grid Limit Line: {tokens_to_buy} DOGE at ${price}")
+                            order = self.exchange.create_limit_buy_order(self.symbol, tokens_to_buy, price)
+                            self.active_buy_orders[price] = order['id']
+                            self.bot_cash -= self.capital_per_grid
+                        except Exception as e:
+                            print(f"Failed to place buy rung at ${price}: {e}")
+
+            # Raise up a Sell Limit if the grid target sits above current market price
+            elif price > current_price:
+                if price not in self.active_buy_orders and price not in self.active_sell_orders:
+                    tokens_to_sell = round(self.capital_per_grid / price, 1)
+                    if self.bot_doge >= tokens_to_sell:
+                        try:
+                            print(f"Placing Sell Grid Limit Line: {tokens_to_sell} DOGE at ${price}")
+                            order = self.exchange.create_limit_sell_order(self.symbol, tokens_to_sell, price)
+                            self.active_sell_orders[price] = order['id']
+                            self.bot_doge -= tokens_to_sell
+                        except Exception as e:
+                            print(f"Failed to place sell rung at ${price}: {e}")
+
+    def run_grid_cycle(self):
+        """Executes the concurrent multi-grid tracking routine."""
+        print(f"\n--- [NATIVE MULTI-GRID STATIC MATRIX RUNNER] ---")
+        print(f" -> Current Active Buy Lines: {list(self.active_buy_orders.keys())}")
+        print(f" -> Current Active Sell Lines: {list(self.active_sell_orders.keys())}")
+        print(f" -> INTERNAL BALANCE SHEET: ${self.bot_cash:.2f} Free Cash | {self.bot_doge:.1f} Seeded DOGE Tokens")
+
+        # Process fills and deploy missing lines
+        self.sync_and_check_fills()
+        self.deploy_missing_grid_lines()
 
     def start_loop(self):
-        print("Deploying Locked Native Grid Emulation Loop...")
+        print("Deploying Multi-Tiered Native Grid Emulation Matrix...")
         while True:
             try:
                 self.run_grid_cycle()
             except Exception as e:
                 print(f"Loop runtime exception caught: {e}")
             
-            print("Checking order matching state flags in 60 seconds...")
+            print("Checking order matrix states flags in 60 seconds...")
             time.sleep(60)
 
 if __name__ == '__main__':
