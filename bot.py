@@ -27,16 +27,16 @@ class OKXDynamicGridBot:
         self.exchange.set_sandbox_mode(True)
         self.symbol = 'DOGE/USDT'
         
-        # SELF-CONTAINED BUDGET MANAGEMENT
+        # ADJUSTED BUDGET MANAGEMENT FOR OPTIMAL RISK
         self.total_bot_budget = 100.0  
-        self.number_of_grids = 2       
-        self.capital_per_grid = self.total_bot_budget / self.number_of_grids  # $50.00
+        self.number_of_grids = 4       # Changed from 2 to 4 grids
+        self.capital_per_grid = self.total_bot_budget / self.number_of_grids  # Now exactly $25.00
         
         # Internal tracking ledger balances
         self.bot_cash = 100.0          
         self.bot_doge = 0.0            
         
-        self.grid_percentage = 0.015 
+        self.grid_percentage = 0.015  
         
         self.current_buy_order = None
         self.current_sell_order = None
@@ -71,7 +71,7 @@ class OKXDynamicGridBot:
                 if order['status'] == 'closed':
                     filled_amount = float(order['filled'])
                     self.bot_doge += filled_amount
-                    print(f"💥 [FILL EVENT] Buy Order hit at ${order['price']}! Converted $50 allocation into {filled_amount} DOGE.")
+                    print(f"💥 [FILL EVENT] Buy Order hit at ${order['price']}! Converted $25 allocation into {filled_amount} DOGE.")
                     self.current_buy_order = None
                 elif order['status'] == 'canceled':
                     self.current_buy_order = None
@@ -89,7 +89,7 @@ class OKXDynamicGridBot:
                     
                     self.bot_cash += usd_returned
                     self.bot_doge -= tokens_sold
-                    print(f"💥 [FILL EVENT] Sell Order hit at ${sell_price}! Returned original $50 capital + profit: Total ${usd_returned:.2f} USDT.")
+                    print(f"💥 [FILL EVENT] Sell Order hit at ${sell_price}! Returned original $25 capital + profit: Total ${usd_returned:.2f} USDT.")
                     self.current_sell_order = None
                 elif order['status'] == 'canceled':
                     self.current_sell_order = None
@@ -137,7 +137,6 @@ class OKXDynamicGridBot:
         # --- DEPLOYMENT WINDOWS ---
         # 1. Buy Side Line Placement
         if not self.current_buy_order:
-            # Recompute cash available by checking what is already bound to open orders
             allocated_to_buy = self.capital_per_grid if self.current_buy_order else 0.0
             available_cash = self.bot_cash - allocated_to_buy
             
