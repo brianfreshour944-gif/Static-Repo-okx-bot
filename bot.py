@@ -1,4 +1,3 @@
-
 import os
 import time
 import pandas as pd
@@ -13,12 +12,13 @@ class OKXDynamicGridBot:
         print(f"OKX_PASSPHRASE Found: {bool(os.getenv('OKX_PASSPHRASE'))}")
         print("--------------------------------")
 
-        # SECURE API CONFIGURATION
+        # SECURE API CONFIGURATION WITH US DOMAIN OVERRIDE
         self.exchange = ccxt.okx({
             'apiKey': os.getenv('OKX_API_KEY'),
             'secret': os.getenv('OKX_API_SECRET'),
             'password': os.getenv('OKX_PASSPHRASE'),
             'enableRateLimit': True,
+            'hostname': 'us.okx.com',  # FIXED: Routes explicitly to the regional US isolated engine
             'options': {
                 'defaultType': 'spot',  # Forces Spot market execution
             }
@@ -82,7 +82,6 @@ class OKXDynamicGridBot:
                     self.current_buy_order = None
             except Exception as e:
                 print(f"Error checking buy status (Auth/API Issue): {e}")
-                # If keys are invalid, wipe tracking to attempt re-placement later
                 if "50119" in str(e): return
 
         # Check existing Sell Order state safely
@@ -121,7 +120,7 @@ class OKXDynamicGridBot:
             except Exception as e:
                 print(f"Main loop exception triggered: {e}")
             
-            # This sleep now guarantees execution protection even if API errors hit
+            # Safe sleep execution block
             print("Waiting 15 minutes before checking the moving average path...")
             time.sleep(900)
 
