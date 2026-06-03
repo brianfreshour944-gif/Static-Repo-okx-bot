@@ -12,7 +12,7 @@ class OKXDynamicGridBot:
         print(f"OKX_PASSPHRASE Found: {bool(os.getenv('OKX_PASSPHRASE'))}")
         print("--------------------------------")
 
-        # SECURE API CONFIGURATION WITH US DOMAIN OVERRIDE
+        # SECURE API CONFIGURATION
         self.exchange = ccxt.okx({
             'apiKey': os.getenv('OKX_API_KEY'),
             'secret': os.getenv('OKX_API_SECRET'),
@@ -24,29 +24,25 @@ class OKXDynamicGridBot:
             }
         })
         
-        # Enforce the Demo Trading environment cleanly via CCXT native method
         self.exchange.set_sandbox_mode(True)
-        
         self.symbol = 'DOGE/USDT'
         
-        # SELF-CONTAINED INTERNAL BUDGET LEDGER
-        self.total_bot_budget = 100.0  # Hard budget ceiling limit
-        self.number_of_grids = 2       # 1 Buy line + 1 Sell line
-        self.capital_per_grid = self.total_bot_budget / self.number_of_grids  # Exactly $50.00
+        # SELF-CONTAINED BUDGET MANAGEMENT
+        self.total_bot_budget = 100.0  
+        self.number_of_grids = 2       
+        self.capital_per_grid = self.total_bot_budget / self.number_of_grids  # $50.00
         
-        # Internal wallet states (Forces bot to ignore the millions in demo account)
-        self.bot_cash = 100.0          # Initial cash investment bank
-        self.bot_doge = 0.0            # Initial token inventory balance
+        # Internal tracking ledger balances
+        self.bot_cash = 100.0          
+        self.bot_doge = 0.0            
         
-        # Grid parameter distance from moving average anchor line
         self.grid_percentage = 0.015 
         
-        # Memory storage for active order tracking IDs
         self.current_buy_order = None
         self.current_sell_order = None
 
     def get_moving_average_center(self):
-        """Fetches recent candles and calculates the 20-period SMA anchor line."""
+        """Fetches recent hourly candles and calculates the 20-period SMA anchor line."""
         try:
             candles = self.exchange.fetch_ohlcv(self.symbol, timeframe='1h', limit=30)
             df = pd.DataFrame(candles, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
@@ -57,15 +53,51 @@ class OKXDynamicGridBot:
             return None
 
     def cancel_safe(self, order_id):
-        """Helper to cancel an order safely without throwing script errors."""
+        """Helper to drop a tracking trace block safely on the exchange core."""
         if order_id:
             try:
                 self.exchange.cancel_order(order_id, self.symbol)
+                return True
             except Exception:
-                pass 
+                return False
+        return False
+
+    def sync_and_audit_fills(self):
+        """Queries active order slots to accurately record filled states to the ledger."""
+        # 1. AUDIT ACTIVE BUY CONTRACTS
+        if self.current_buy_order:
+            try:
+                order = self.exchange.fetch_order(self.current_buy_order, self.symbol)
+                if order['status'] == 'closed':
+                    filled_amount = float(order['filled'])
+                    self.bot_doge += filled_amount
+                    print(f"💥 [FILL EVENT] Buy Order hit at ${order['price']}! Converted $50 allocation into {filled_amount} DOGE.")
+                    self.current_buy_order = None
+                elif order['status'] == 'canceled':
+                    self.current_buy_order = None
+            except Exception as e:
+                print(f"Error checking buy status: {e}")
+
+        # 2. AUDIT ACTIVE SELL CONTRACTS
+        if self.current_sell_order:
+            try:
+                order = self.exchange.fetch_order(self.current_sell_order, self.symbol)
+                if order['status'] == 'closed':
+                    sell_price = float(order['price'])
+                    tokens_sold = float(order['filled'])
+                    usd_returned = round(sell_price * tokens_sold, 4)
+                    
+                    self.bot_cash += usd_returned
+                    self.bot_doge -= tokens_sold
+                    print(f"💥 [FILL EVENT] Sell Order hit at ${sell_price}! Returned original $50 capital + profit: Total ${usd_returned:.2f} USDT.")
+                    self.current_sell_order = None
+                elif order['status'] == 'canceled':
+                    self.current_sell_order = None
+            except Exception as e:
+                print(f"Error checking sell status: {e}")
 
     def update_grid_positions(self):
-        """Calculates dynamic levels and moves coordinates under strict internal budget limits."""
+        """Manages trailing targets and dynamically handles line adjustment overhead."""
         center_line = self.get_moving_average_center()
         if not center_line:
             return
@@ -77,91 +109,52 @@ class OKXDynamicGridBot:
         print(f" -> Desired Buy Grid: ${target_buy_price:.5f}")
         print(f" -> Desired Sell Grid: ${target_sell_price:.5f}")
         
-        # Print the self-contained internal ledger report metrics
+        # Audit live states prior to performing tracking logic adjustments
+        self.sync_and_audit_fills()
         print(f" -> INTERNAL LEDGER: ${self.bot_cash:.2f} Free Cash | {self.bot_doge:.2f} Available DOGE Tokens")
 
         # --- DYNAMIC CHASING CLEANUP ENGINE ---
-        # If the market center moved, cancel stale orders so they can be replaced at the new targets
         if self.current_buy_order:
             try:
                 order = self.exchange.fetch_order(self.current_buy_order, self.symbol)
                 if order['status'] == 'open' and float(order['price']) != target_buy_price:
                     print(f"🔄 Moving average shifted. Canceling old Buy at ${order['price']} to adjust to new target ${target_buy_price}")
-                    self.cancel_safe(self.current_buy_order)
-                    self.current_buy_order = None
-                    self.bot_cash += self.capital_per_grid  # Credit the cash back to replace it
+                    if self.cancel_safe(self.current_buy_order):
+                        self.current_buy_order = None
             except Exception as e:
-                print(f"Error updating/checking buy grid drift: {e}")
+                print(f"Error updating buy grid drift: {e}")
 
         if self.current_sell_order:
             try:
                 order = self.exchange.fetch_order(self.current_sell_order, self.symbol)
                 if order['status'] == 'open' and float(order['price']) != target_sell_price:
                     print(f"🔄 Moving average shifted. Canceling old Sell at ${order['price']} to adjust to new target ${target_sell_price}")
-                    self.cancel_safe(self.current_sell_order)
-                    self.current_sell_order = None
+                    if self.cancel_safe(self.current_sell_order):
+                        self.current_sell_order = None
             except Exception as e:
-                print(f"Error updating/checking sell grid drift: {e}")
-        # -------------------------------------
+                print(f"Error updating sell grid drift: {e}")
 
-        # CHECK BUY ORDER FILL STATUS (If still active)
-        if self.current_buy_order:
-            try:
-                order = self.exchange.fetch_order(self.current_buy_order, self.symbol)
-                if order['status'] == 'closed':
-                    # Extract the precise quantity filled from the exchange receipt
-                    filled_amount = float(order['filled'])
-                    self.bot_doge += filled_amount
-                    print(f"💥 [FILL EVENT] Buy Order hit at ${order['price']}! Converted $50 allocation into {filled_amount} DOGE.")
-                    self.current_buy_order = None
-            except Exception as e:
-                print(f"Error checking buy status: {e}")
-                if "50119" in str(e): return
-
-        # CHECK SELL ORDER FILL STATUS (If still active)
-        if self.current_sell_order:
-            try:
-                order = self.exchange.fetch_order(self.current_sell_order, self.symbol)
-                if order['status'] == 'closed':
-                    # Calculate exact returns (Execution price * token volume filled)
-                    sell_price = float(order['price'])
-                    tokens_sold = float(order['filled'])
-                    usd_returned = round(sell_price * tokens_sold, 4)
-                    
-                    # Return original capital + the accrued trade profits directly back to cash bank
-                    self.bot_cash += usd_returned
-                    self.bot_doge -= tokens_sold
-                    
-                    print(f"💥 [FILL EVENT] Sell Order hit at ${sell_price}! Returned original $50 capital + profit: Total ${usd_returned:.2f} USDT.")
-                    self.current_sell_order = None
-            except Exception as e:
-                print(f"Error checking sell status: {e}")
-                if "50119" in str(e): return
-
-        # DEPLOYMENT WINDOW 1: Handle the Buy Side Allocation
+        # --- DEPLOYMENT WINDOWS ---
+        # 1. Buy Side Line Placement
         if not self.current_buy_order:
-            # Check if our local cash ledger has enough uncommitted balance remaining
-            if self.bot_cash >= self.capital_per_grid:
+            # Recompute cash available by checking what is already bound to open orders
+            allocated_to_buy = self.capital_per_grid if self.current_buy_order else 0.0
+            available_cash = self.bot_cash - allocated_to_buy
+            
+            if available_cash >= self.capital_per_grid:
                 dynamic_buy_amount = round(self.capital_per_grid / target_buy_price, 1)
-                
                 try:
                     print(f"Placing Buy Grid Line: Allocating ${self.capital_per_grid:.2f} internally to target {dynamic_buy_amount} DOGE at ${target_buy_price}")
                     order = self.exchange.create_limit_buy_order(self.symbol, dynamic_buy_amount, target_buy_price)
                     self.current_buy_order = order['id']
-                    
-                    # IMMEDIATELY lock up the cash internally so subsequent loop ticks cannot double-spend it
-                    self.bot_cash -= self.capital_per_grid
                 except Exception as e:
                     print(f"Execution Engine failed to place Buy Grid Line: {e}")
             else:
                 print(f"⚠️ Buy Grid Idle: Waiting for Sell Grid to fill to free up required ${self.capital_per_grid:.2f} allocation cash.")
             
-        # DEPLOYMENT WINDOW 2: Handle the Sell Side Allocation (Inventory Guardrail)
+        # 2. Sell Side Line Placement
         if not self.current_sell_order:
-            # Calculate the target token volume needed to capture our $50 segment block value
             dynamic_sell_amount = round(self.capital_per_grid / target_sell_price, 1)
-            
-            # Check if our local internal ledger balances show we own enough tokens to open the order
             if self.bot_doge >= dynamic_sell_amount:
                 try:
                     print(f"Placing Sell Grid Line: Selling {dynamic_sell_amount} DOGE at ${target_sell_price} (Target Return: ${self.capital_per_grid:.2f})")
