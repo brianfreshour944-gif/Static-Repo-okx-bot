@@ -29,9 +29,9 @@ class OKXNativeClassicGridBot:
         
         # EXACT MATCH NATIVE OKX BOT CONFIGURATION
         self.total_bot_budget = 100.0   # Total Investment: $100.00
-        self.lower_bound = 0.08847      # Bottom of grid range
-        self.upper_bound = 0.09211      # Top of grid range
-        self.grid_count = 3             # Total horizontal lines in matrix
+        self.lower_bound = 0.08900      # Lower floor target
+        self.upper_bound = 0.09500      # Higher ceiling target
+        self.grid_count = 3             # Keeps your 3-tier structure
         
         # Calculate the exact mathematical spacing grid geometry
         self.grid_prices = self.calculate_grid_prices()
