@@ -1,4 +1,3 @@
-
 import os
 import time
 import pandas as pd
@@ -28,7 +27,7 @@ class OKXDynamicGridBot:
         self.exchange.set_sandbox_mode(True)
         self.symbol = 'DOGE/USDT'
         
-        # ADJUSTED BUDGET MANAGEMENT FOR OPTIMAL RISK
+        # BUDGET MANAGEMENT
         self.total_bot_budget = 100.0  
         self.number_of_grids = 4       # 4 grids = $25 increments
         self.capital_per_grid = self.total_bot_budget / self.number_of_grids  
@@ -36,6 +35,10 @@ class OKXDynamicGridBot:
         # Internal tracking ledger balances
         self.bot_cash = 100.0          
         self.bot_doge = 0.0            
+        
+        # FIXED: Inventory tracking list to store exact buy records
+        # Items will be dicts: {'buy_price': float, 'qty': float}
+        self.purchased_batches = []
         
         self.grid_percentage = 0.015  
         
@@ -74,9 +77,14 @@ class OKXDynamicGridBot:
                     buy_price = float(order['price'])
                     usd_spent = round(buy_price * filled_amount, 4)
                     
-                    # FIXED: Deduct cash from tracking ledger when a buy fills
                     self.bot_cash -= usd_spent
                     self.bot_doge += filled_amount
+                    
+                    # FIXED: Append the precise fill metrics to inventory memory
+                    self.purchased_batches.append({
+                        'buy_price': buy_price,
+                        'qty': filled_amount
+                    })
                     
                     print(f"💥 [FILL EVENT] Buy Order hit at ${buy_price}! Spent ${usd_spent:.2f} to convert allocation into {filled_amount} DOGE.")
                     self.current_buy_order = None
@@ -94,9 +102,16 @@ class OKXDynamicGridBot:
                     tokens_sold = float(order['filled'])
                     usd_returned = round(sell_price * tokens_sold, 4)
                     
-                    # Add returned cash and remove sold tokens
                     self.bot_cash += usd_returned
                     self.bot_doge -= tokens_sold
+                    
+                    # FIXED: Clear the matching inventory record on a successful sell
+                    if self.purchased_batches:
+                        # Pop the highest-priced batch since our sell targeted its cost basis
+                        self.purchased_batches.sort(key=lambda x: x['buy_price'])
+                        removed_batch = self.purchased_batches.pop()
+                        print(f"🔒 [INVENTORY REMOVED] Cleared batch bought at ${removed_batch['buy_price']} containing {removed_batch['qty']} DOGE.")
+                    
                     print(f"💥 [FILL EVENT] Sell Order hit at ${sell_price}! Returned original capital + profit: Total ${usd_returned:.2f} USDT.")
                     self.current_sell_order = None
                 elif order['status'] == 'canceled':
@@ -111,13 +126,25 @@ class OKXDynamicGridBot:
             return
             
         target_buy_price = round(center_line * (1 - self.grid_percentage), 5)
-        target_sell_price = round(center_line * (1 + self.grid_percentage), 5)
+        
+        # FIXED: Determine sell price based on real cost, not the moving average
+        if self.purchased_batches:
+            # Anchor target to the highest asset cost batch to prevent selling at a loss
+            highest_cost = max([b['buy_price'] for b in self.purchased_batches])
+            target_sell_price = round(highest_cost * (1 + self.grid_percentage), 5)
+            # Match target quantity directly to what we actually own in that batch
+            self.purchased_batches.sort(key=lambda x: x['buy_price'])
+            target_sell_amount = round(self.purchased_batches[-1]['qty'], 1)
+        else:
+            # Fallback if inventory is clean
+            target_sell_price = round(center_line * (1 + self.grid_percentage), 5)
+            target_sell_amount = round(self.capital_per_grid / target_sell_price, 1)
         
         print(f"\n[MA Anchor Center]: ${center_line:.5f}")
         print(f" -> Desired Buy Grid: ${target_buy_price:.5f}")
-        print(f" -> Desired Sell Grid: ${target_sell_price:.5f}")
+        print(f" -> Desired Sell Grid: ${target_sell_price:.5f} (Target Qty: {target_sell_amount} DOGE)")
         
-        # Audit live states prior to performing tracking logic adjustments
+        # Audit live states prior to executing adjustments
         self.sync_and_audit_fills()
         print(f" -> INTERNAL LEDGER: ${self.bot_cash:.2f} Free Cash | {self.bot_doge:.2f} Available DOGE Tokens")
 
@@ -135,8 +162,9 @@ class OKXDynamicGridBot:
         if self.current_sell_order:
             try:
                 order = self.exchange.fetch_order(self.current_sell_order, self.symbol)
+                # FIXED: Only cancel and adjust the sell order if the cost-basis calculation itself changes
                 if order['status'] == 'open' and float(order['price']) != target_sell_price:
-                    print(f"🔄 Moving average shifted. Canceling old Sell at ${order['price']} to adjust to new target ${target_sell_price}")
+                    print(f"🔄 Cost Basis shifted. Canceling old Sell at ${order['price']} to adjust to new target ${target_sell_price}")
                     if self.cancel_safe(self.current_sell_order):
                         self.current_sell_order = None
             except Exception as e:
@@ -161,21 +189,19 @@ class OKXDynamicGridBot:
             
         # 2. Sell Side Line Placement
         if not self.current_sell_order:
-            dynamic_sell_amount = round(self.capital_per_grid / target_sell_price, 1)
-            if self.bot_doge >= dynamic_sell_amount:
+            if self.bot_doge >= target_sell_amount and target_sell_amount > 0:
                 try:
-                    print(f"Placing Sell Grid Line: Selling {dynamic_sell_amount} DOGE at ${target_sell_price} (Target Return: ${self.capital_per_grid:.2f})")
-                    order = self.exchange.create_limit_sell_order(self.symbol, dynamic_sell_amount, target_sell_price)
+                    print(f"Placing Sell Grid Line: Selling {target_sell_amount} DOGE at ${target_sell_price} (Target Return: ${round(target_sell_amount * target_sell_price, 2):.2f})")
+                    order = self.exchange.create_limit_sell_order(self.symbol, target_sell_amount, target_sell_price)
                     self.current_sell_order = order['id']
                 except Exception as e:
                     print(f"Execution Engine failed to place Sell Grid Line: {e}")
             else:
-                print(f"📌 Sell Grid Idle: Internal bot inventory has {self.bot_doge:.2f}/{dynamic_sell_amount} DOGE tokens required.")
+                print(f"📌 Sell Grid Idle: Internal bot inventory has {self.bot_doge:.2f}/{target_sell_amount} DOGE tokens required.")
 
     def start_loop(self):
         print("Starting Dynamic Tracking Grid Bot (High-Frequency Loop Active)...")
         
-        # Track when we last updated the moving average grid
         last_ma_update_time = 0
         ma_update_interval = 900  # 15 minutes in seconds
 
@@ -183,20 +209,16 @@ class OKXDynamicGridBot:
             current_time = time.time()
             
             try:
-                # Every 15 minutes, fetch candles and adjust for drift
                 if current_time - last_ma_update_time >= ma_update_interval:
                     print("\n⏰ [15-MIN INTERVAL] Recalculating Moving Average Anchor and checking grid drift...")
                     self.update_grid_positions()
                     last_ma_update_time = current_time
-                
-                # Every 15 seconds, check if an order filled!
                 else:
                     self.sync_and_audit_fills()
                     
             except Exception as e:
                 print(f"Main loop exception triggered: {e}")
             
-            # Sleep for 15 seconds before checking fills again
             time.sleep(15)
 
 if __name__ == '__main__':
