@@ -1,3 +1,4 @@
+
 import os
 import time
 import pandas as pd
@@ -144,7 +145,6 @@ class OKXDynamicGridBot:
         # --- DEPLOYMENT WINDOWS ---
         # 1. Buy Side Line Placement
         if not self.current_buy_order:
-            # Recompute cash tracking rules accurately
             allocated_to_buy = self.capital_per_grid if self.current_buy_order else 0.0
             available_cash = self.bot_cash - allocated_to_buy
             
@@ -161,7 +161,6 @@ class OKXDynamicGridBot:
             
         # 2. Sell Side Line Placement
         if not self.current_sell_order:
-            # FIXED: Base the sell amount off the current grid's allocation level ($25)
             dynamic_sell_amount = round(self.capital_per_grid / target_sell_price, 1)
             if self.bot_doge >= dynamic_sell_amount:
                 try:
@@ -172,7 +171,8 @@ class OKXDynamicGridBot:
                     print(f"Execution Engine failed to place Sell Grid Line: {e}")
             else:
                 print(f"📌 Sell Grid Idle: Internal bot inventory has {self.bot_doge:.2f}/{dynamic_sell_amount} DOGE tokens required.")
-def start_loop(self):
+
+    def start_loop(self):
         print("Starting Dynamic Tracking Grid Bot (High-Frequency Loop Active)...")
         
         # Track when we last updated the moving average grid
@@ -183,13 +183,13 @@ def start_loop(self):
             current_time = time.time()
             
             try:
-                # OPTION A: Every 15 minutes, fetch candles and adjust for drift
+                # Every 15 minutes, fetch candles and adjust for drift
                 if current_time - last_ma_update_time >= ma_update_interval:
                     print("\n⏰ [15-MIN INTERVAL] Recalculating Moving Average Anchor and checking grid drift...")
                     self.update_grid_positions()
                     last_ma_update_time = current_time
                 
-                # OPTION B: Every loop cycle, check if an order filled!
+                # Every 15 seconds, check if an order filled!
                 else:
                     self.sync_and_audit_fills()
                     
@@ -197,7 +197,6 @@ def start_loop(self):
                 print(f"Main loop exception triggered: {e}")
             
             # Sleep for 15 seconds before checking fills again
-            # OKX rate limits easily allow this (CCXT automatic rate limiter handles safety)
             time.sleep(15)
 
 if __name__ == '__main__':
