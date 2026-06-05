@@ -6,14 +6,14 @@ from dotenv import load_dotenv
 load_dotenv()
 
 class OKXGridBot:
-    def __init__(self):
-        self.exchange = ccxt.okx({
-            'apiKey': os.getenv('OKX_API_KEY'),
-            'secret': os.getenv('OKX_API_SECRET'),
-            'password': os.getenv('OKX_PASSPHRASE'),
-            'enableRateLimit': True,
-            'options': {'defaultType': 'spot'}
-        })
+    self.exchange = ccxt.okx({
+    'apiKey': os.getenv('OKX_API_KEY'),
+    'secret': os.getenv('OKX_API_SECRET'),
+    'password': os.getenv('OKX_PASSPHRASE'),
+    'enableRateLimit': True,
+    'hostname': 'app.okx.com',  # <--- Ensure this is set
+    'options': {'defaultType': 'spot'}
+})
         
         # Set sandbox mode (remove this line when switching to Live)
         self.exchange.set_sandbox_mode(True)
