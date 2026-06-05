@@ -7,7 +7,7 @@ load_dotenv()
 
 class OKXGridBot:
     def __init__(self):
-       self.exchange = ccxt.okx({
+        self.exchange = ccxt.okx({
             'apiKey': os.getenv('OKX_API_KEY'),
             'secret': os.getenv('OKX_API_SECRET'),
             'password': os.getenv('OKX_PASSPHRASE'),
@@ -15,12 +15,16 @@ class OKXGridBot:
             'hostname': 'app.okx.com',
             'options': {
                 'defaultType': 'unified',
-                'x-simulated-trading': 1, # Keep this
-            },
-            'headers': {
-                'x-simulated-trading': '1' # ADD THIS LINE HERE
+                'x-simulated-trading': 1
             }
         })
+        
+        # This line must be indented exactly 8 spaces
+        self.exchange.set_sandbox_mode(True)
+        
+        self.symbol = 'DOGE/USDT'
+        self.total_budget = 100.0
+        # ... rest of your initialization
         
         self.exchange.set_sandbox_mode(True)
         
