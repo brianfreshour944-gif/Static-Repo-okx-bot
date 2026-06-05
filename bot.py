@@ -82,6 +82,11 @@ class OKXGridBot:
     def manage_grid(self, current_price):
         if not current_price: return
 
+        # GRID LOCKING: Only add new orders if the current number of orders 
+        # is less than the desired capacity. This prevents the "jitter" effect.
+        if (len(self.active_buys) + len(self.active_sells)) >= (self.grid_count - 1):
+            return
+
         amount_per_grid = self.total_budget / self.grid_count
         half = self.grid_count // 2
 
