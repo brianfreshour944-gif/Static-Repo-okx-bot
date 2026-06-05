@@ -6,7 +6,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 class OKXGridBot:
-   def __init__(self):
+ def __init__(self):
         self.exchange = ccxt.okx({
             'apiKey': os.getenv('OKX_API_KEY'),
             'secret': os.getenv('OKX_API_SECRET'),
@@ -18,6 +18,19 @@ class OKXGridBot:
                 'x-simulated-trading': '1'  # <--- THIS IS THE FIX
             }
         })
+        
+        # Keep this set to True to ensure CCXT uses sandbox endpoints
+        self.exchange.set_sandbox_mode(True)
+        
+        self.symbol = 'DOGE/USDT'
+        self.total_budget = 100.0
+        self.grid_count = 4
+        self.grid_spacing = 0.004
+
+        self.active_buys = {}
+        self.active_sells = {}
+
+        self.test_connection()
         
         # Keep this set to True for Sandbox mode
         self.exchange.set_sandbox_mode(True)
