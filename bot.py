@@ -1,6 +1,6 @@
 import os
 import time
-import ccxt
+import ccxt.pro as ccxt  # <-- Use ccxt.pro
 
 class OKXDynamicGridBot:
     def __init__(self):
@@ -9,108 +9,95 @@ class OKXDynamicGridBot:
             'secret': os.getenv('OKX_API_SECRET'),
             'password': os.getenv('OKX_PASSPHRASE'),
             'enableRateLimit': True,
-            'hostname': 'app.okx.com',  # Explicitly set to match your login URL
             'options': {
-                'defaultType': 'unified', # US accounts use 'unified' instead of 'spot'
-                'x-simulated-trading': 1  # Keep this for your Demo keys
+                'defaultType': 'spot',   # or 'unified'
             }
         })
         self.exchange.set_sandbox_mode(True)
-        self.symbol = 'DOGE/USDT'
-        # ... rest of your variables
-        
-        # This tells CCXT to use the Sandbox endpoints
-        self.exchange.set_sandbox_mode(True)
-        
+
         self.symbol = 'DOGE/USDT'
         self.total_bot_budget = 100.0
-        self.lower_bound = 0.08200 
-        self.upper_bound = 0.08800
-        self.grid_count = 3
-        self.grid_prices = self.calculate_grid_prices()
-        self.active_buy_orders = {}  # {price: order_id}
-        self.active_sell_orders = {} # {price: order_id}
+        self.grid_count = 5          # More grids = finer control
+        self.grid_spacing = 0.003    # Price spacing (adjust based on volatility)
+        
+        self.active_buy_orders = {}   # {price: order_id}
+        self.active_sell_orders = {}  # {price: order_id}
+        self.position = 0.0           # Current DOGE holding
 
-    def calculate_grid_prices(self):
-        step = (self.upper_bound - self.lower_bound) / (self.grid_count - 1)
-        return [round(self.lower_bound + (i * step), 5) for i in range(self.grid_count)]
-
-    def cancel_stale_orders(self):
-        try:
-            ticker = self.exchange.fetch_ticker(self.symbol)
-            current_price = ticker['last']
-            threshold = 0.02
-            for price, order_id in list(self.active_buy_orders.items()):
-                if price < current_price * (1 - threshold):
-                    self.exchange.cancel_order(order_id, self.symbol)
-                    del self.active_buy_orders[price]
-                    print(f"Cleanup: Cancelled stale BUY at {price}")
-            for price, order_id in list(self.active_sell_orders.items()):
-                if price > current_price * (1 + threshold):
-                    self.exchange.cancel_order(order_id, self.symbol)
-                    del self.active_sell_orders[price]
-                    print(f"Cleanup: Cancelled stale SELL at {price}")
-        except Exception as e:
-            print(f"Cleanup Error: {e}")
-
-    def sleep_until_next_interval(self, interval_minutes=15):
-        now = time.localtime()
-        minutes_past = now.tm_min % interval_minutes
-        wait_minutes = interval_minutes - minutes_past - 1
-        wait_seconds = 60 - now.tm_sec
-        total_sleep = (wait_minutes * 60) + wait_seconds
-        print(f"Aligning to {interval_minutes}m candle. Sleeping for {total_sleep}s...")
-        time.sleep(total_sleep)
-
-    def sync_and_check_fills(self):
-        try:
-            # Check Buy Fills
-            for price, order_id in list(self.active_buy_orders.items()):
-                order = self.exchange.fetch_order(order_id, self.symbol)
-                if order['status'] == 'closed':
-                    print(f"Fill confirmed: Bought at {price}")
-                    del self.active_buy_orders[price]
-            # Check Sell Fills
-            for price, order_id in list(self.active_sell_orders.items()):
-                order = self.exchange.fetch_order(order_id, self.symbol)
-                if order['status'] == 'closed':
-                    print(f"Fill confirmed: Sold at {price}")
-                    del self.active_sell_orders[price]
-        except Exception as e:
-            print(f"Sync Error: {e}")
-
-    def deploy_missing_grid_lines(self):
-        try:
-            amount_per_grid = (self.total_bot_budget / len(self.grid_prices))
-            ticker = self.exchange.fetch_ticker(self.symbol)
-            current_price = ticker['last']
-
-            for price in self.grid_prices:
-                qty = round(amount_per_grid / price, 1)
-                
-                if price < current_price and price not in self.active_buy_orders:
-                    order = self.exchange.create_limit_buy_order(self.symbol, qty, price)
-                    self.active_buy_orders[price] = order['id']
-                    print(f"Placed Buy at {price}")
-                elif price > current_price and price not in self.active_sell_orders:
-                    order = self.exchange.create_limit_sell_order(self.symbol, qty, price)
-                    self.active_sell_orders[price] = order['id']
-                    print(f"Placed Sell at {price}")
-        except Exception as e:
-            print(f"Deployment Error: {e}")
-
-    def start_loop(self):
-        print("Bot active. Maintaining grid...")
+    async def watch_price_and_orders(self):
+        """Main real-time loop using WebSockets"""
+        print("Bot started with WebSocket monitoring...")
+        
         while True:
             try:
-                self.cancel_stale_orders()
-                self.sync_and_check_fills()
-                self.deploy_missing_grid_lines()
-            except Exception as e:
-                print(f"Loop Error: {e}")
-            
-            self.sleep_until_next_interval(15)
+                # Get latest price via WebSocket (non-blocking)
+                ticker = await self.exchange.watch_ticker(self.symbol)
+                current_price = ticker['last']
+                
+                print(f"Current price: {current_price:.5f}")
 
+                # Check for filled orders in real-time
+                orders = await self.exchange.watch_orders(self.symbol)
+                self.handle_filled_orders(orders)
+
+                # Maintain grid
+                self.manage_grid(current_price)
+
+            except Exception as e:
+                print(f"WebSocket error: {e}")
+                await asyncio.sleep(5)  # Brief backoff
+
+    def manage_grid(self, current_price):
+        """Dynamic grid around current price"""
+        amount_per_grid = self.total_bot_budget / self.grid_count
+        
+        # Calculate dynamic grid levels
+        half = self.grid_count // 2
+        grid_prices = [
+            round(current_price * (1 + (i - half) * self.grid_spacing), 5)
+            for i in range(self.grid_count)
+        ]
+
+        for price in grid_prices:
+            qty = round(amount_per_grid / price, 1)
+            
+            if price < current_price and price not in self.active_buy_orders:
+                try:
+                    order = self.exchange.create_limit_buy_order(self.symbol, qty, price)
+                    self.active_buy_orders[price] = order['id']
+                    print(f"Placed BUY grid at {price}")
+                except Exception as e:
+                    print(f"Buy order error: {e}")
+
+            elif price > current_price and price not in self.active_sell_orders:
+                try:
+                    order = self.exchange.create_limit_sell_order(self.symbol, qty, price)
+                    self.active_sell_orders[price] = order['id']
+                    print(f"Placed SELL grid at {price}")
+                except Exception as e:
+                    print(f"Sell order error: {e}")
+
+    def handle_filled_orders(self, orders):
+        """Process filled orders from watch_orders"""
+        for order in orders:
+            if order['status'] == 'closed':
+                price = order['price']
+                side = order['side']
+                
+                if side == 'buy' and price in self.active_buy_orders:
+                    print(f"BUY filled at {price}")
+                    del self.active_buy_orders[price]
+                    # Update position...
+                elif side == 'sell' and price in self.active_sell_orders:
+                    print(f"SELL filled at {price}")
+                    del self.active_sell_orders[price]
+
+    async def run(self):
+        await self.watch_price_and_orders()
+
+
+# Run the async bot
 if __name__ == '__main__':
+    import asyncio
     bot = OKXDynamicGridBot()
-    bot.start_loop()
+    asyncio.run(bot.run())
