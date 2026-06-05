@@ -21,7 +21,7 @@ class OKXGridBot:
         
         # IMPORTANT: Set to False for Live Trading.
         # Only set to True if using dedicated Sandbox API keys.
-        self.exchange.set_sandbox_mode(False)
+        self.exchange.set_sandbox_mode(true)
         
         self.symbol = 'DOGE/USDT'
         self.total_budget = 100.0
