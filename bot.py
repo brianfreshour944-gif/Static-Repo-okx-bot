@@ -15,7 +15,7 @@ class OKXDynamicGridBot:
         'x-simulated-trading': 0  # Set to 1 if you are using a Demo Key
     }
 })
-        })
+        
         self.symbol = 'DOGE/USDT'
         self.total_bot_budget = 100.0
         self.lower_bound = 0.08200 
