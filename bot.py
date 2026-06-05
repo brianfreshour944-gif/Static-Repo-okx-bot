@@ -21,7 +21,7 @@ class OKXGridBot:
         self.symbol = 'DOGE/USDT'
         self.total_budget = 100.0
         self.grid_count = 4
-        self.grid_spacing = 0.002
+        self.grid_spacing = 0.005      # ← Changed to 0.5%
 
         self.active_buys = {}
         self.active_sells = {}
