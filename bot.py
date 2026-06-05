@@ -15,16 +15,8 @@ class OKXGridBot:
             'hostname': 'app.okx.com',
             'options': {
                 'defaultType': 'unified',
-                'x-simulated-trading': 1
             }
         })
-        
-        # This line must be indented exactly 8 spaces
-        self.exchange.set_sandbox_mode(True)
-        
-        self.symbol = 'DOGE/USDT'
-        self.total_budget = 100.0
-        # ... rest of your initialization
         
         self.exchange.set_sandbox_mode(True)
         
@@ -40,22 +32,42 @@ class OKXGridBot:
 
     def test_connection(self):
         try:
-            print("🔍 Testing connection with app.okx.com...")
             balance = self.exchange.fetch_balance()
             usdt = balance.get('USDT', {}).get('free', 0)
-            print(f"✅ SUCCESS! USDT Balance: {usdt}")
+            doge = balance.get('DOGE', {}).get('free', 0)
+            print(f"✅ Connected Successfully!")
+            print(f"   USDT Balance: {usdt:.4f}")
+            print(f"   DOGE Balance: {doge:.4f}\n")
         except Exception as e:
             print(f"❌ Connection Error: {e}")
-
-    # ... rest of the methods stay the same (get_current_price, manage_grid, run) ...
 
     def get_current_price(self):
         try:
             ticker = self.exchange.fetch_ticker(self.symbol)
             return ticker['last']
         except Exception as e:
-            print(f"Price error: {e}")
+            print(f"❌ Price fetch error: {e}")
             return None
+
+    def cancel_stale_orders(self, current_price):
+        threshold = 0.008
+        for price in list(self.active_buys.keys()):
+            if abs(price - current_price) / current_price > threshold:
+                try:
+                    self.exchange.cancel_order(self.active_buys[price], self.symbol)
+                    del self.active_buys[price]
+                    print(f"🗑️ Cancelled stale BUY  @ {price}")
+                except:
+                    pass
+
+        for price in list(self.active_sells.keys()):
+            if abs(price - current_price) / current_price > threshold:
+                try:
+                    self.exchange.cancel_order(self.active_sells[price], self.symbol)
+                    del self.active_sells[price]
+                    print(f"🗑️ Cancelled stale SELL @ {price}")
+                except:
+                    pass
 
     def manage_grid(self, current_price):
         if not current_price:
@@ -72,29 +84,38 @@ class OKXGridBot:
                 try:
                     order = self.exchange.create_limit_buy_order(self.symbol, qty, price)
                     self.active_buys[price] = order['id']
-                    print(f"✅ BUY placed at {price}")
+                    print(f"🟢 BUY  placed @ {price} | Qty: {qty} DOGE")
                 except Exception as e:
-                    print(f"Buy failed at {price}: {e}")
+                    if "already exists" not in str(e).lower():
+                        print(f"⚠️  Buy failed @ {price}: {e}")
 
             elif price > current_price and price not in self.active_sells:
                 try:
                     order = self.exchange.create_limit_sell_order(self.symbol, qty, price)
                     self.active_sells[price] = order['id']
-                    print(f"✅ SELL placed at {price}")
+                    print(f"🔴 SELL placed @ {price} | Qty: {qty} DOGE")
                 except Exception as e:
-                    print(f"Sell failed at {price}: {e}")
+                    if "already exists" not in str(e).lower():
+                        print(f"⚠️  Sell failed @ {price}: {e}")
 
     def run(self):
-        print("🤖 OKX Grid Bot Started")
+        print("🤖 OKX Grid Bot Started (Enhanced Logging Mode)\n")
+        
         while True:
             try:
                 price = self.get_current_price()
                 if price:
-                    print(f"📊 Current DOGE/USDT: {price:.5f}")
+                    print(f"📊 [{time.strftime('%H:%M:%S')}] Current Price: {price:.5f} | "
+                          f"Buys: {len(self.active_buys)} | Sells: {len(self.active_sells)}")
+                    
+                    self.cancel_stale_orders(price)
                     self.manage_grid(price)
+                    print("-" * 80)
+
                 time.sleep(30)
+
             except Exception as e:
-                print(f"Loop error: {e}")
+                print(f"❌ Loop Error: {e}")
                 time.sleep(10)
 
 
