@@ -6,18 +6,24 @@ from dotenv import load_dotenv
 load_dotenv()
 
 class OKXGridBot:
-    def __init__(self):
-        # Initializing instance variables inside __init__
-        # If you are a European user, use 'myokx' instead of 'okx' 
-        # and set hostname to 'my.okx.com' if needed.
+   def __init__(self):
         self.exchange = ccxt.okx({
             'apiKey': os.getenv('OKX_API_KEY'),
             'secret': os.getenv('OKX_API_SECRET'),
             'password': os.getenv('OKX_PASSPHRASE'),
             'enableRateLimit': True,
             'hostname': 'app.okx.com',
-            'options': {'defaultType': 'spot'}
+            'options': {
+                'defaultType': 'spot',
+                'x-simulated-trading': '1'  # <--- THIS IS THE FIX
+            }
         })
+        
+        # Keep this set to True for Sandbox mode
+        self.exchange.set_sandbox_mode(True)
+        
+        self.symbol = 'DOGE/USDT'
+        # ... rest of your code
         
         # IMPORTANT: Set to False for Live Trading.
         # Only set to True if using dedicated Sandbox API keys.
