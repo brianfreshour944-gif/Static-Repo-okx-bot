@@ -9,11 +9,15 @@ class OKXDynamicGridBot:
             'secret': os.getenv('OKX_API_SECRET'),
             'password': os.getenv('OKX_PASSPHRASE'),
             'enableRateLimit': True,
+            'hostname': 'app.okx.com',  # Explicitly set to match your login URL
             'options': {
-                'defaultType': 'spot',
-                'x-simulated-trading': 1  # Mandatory for Demo keys
+                'defaultType': 'unified', # US accounts use 'unified' instead of 'spot'
+                'x-simulated-trading': 1  # Keep this for your Demo keys
             }
         })
+        self.exchange.set_sandbox_mode(True)
+        self.symbol = 'DOGE/USDT'
+        # ... rest of your variables
         
         # This tells CCXT to use the Sandbox endpoints
         self.exchange.set_sandbox_mode(True)
