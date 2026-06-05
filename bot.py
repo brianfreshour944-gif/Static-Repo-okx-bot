@@ -61,8 +61,7 @@ class OKXGridBot:
             return self.exchange.fetch_ticker(self.symbol)['last']
         except:
             return None
-
- def sync_filled_orders(self):
+    def sync_filled_orders(self):
         try:
             # OKX requires separate calls for open and closed orders
             closed_orders = self.exchange.fetch_closed_orders(self.symbol, limit=20)
