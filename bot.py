@@ -1,7 +1,7 @@
 import os
 import time
 import ccxt
-import psycopg2 
+import psycopg2
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -22,15 +22,15 @@ class OKXGridBot:
         self.total_budget = 100.0
         self.grid_count = 4
         self.grid_spacing = 0.004
+
         self.active_buys = {}
         self.active_sells = {}
+
         self.test_connection()
 
     def log_trade_to_postgres(self, side, price, qty, order_id="N/A"):
-        """Logs trades directly to your Coolify PostgreSQL database."""
         db_url = os.getenv('DATABASE_URL')
         if not db_url:
-            print("❌ DATABASE_URL is missing!")
             return
         try:
             conn = psycopg2.connect(db_url)
@@ -76,7 +76,6 @@ class OKXGridBot:
                         print(f"✅ BUY FILLED @ {price:.5f}")
                         self.log_trade_to_postgres('BUY', price, qty, order_id)
                         del self.active_buys[price]
-                        
                     elif order['side'] == 'sell' and price in self.active_sells:
                         print(f"✅ SELL FILLED @ {price:.5f}")
                         self.log_trade_to_postgres('SELL', price, qty, order_id)
