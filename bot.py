@@ -5,12 +5,16 @@ import ccxt
 class OKXDynamicGridBot:
     def __init__(self):
         self.exchange = ccxt.okx({
-            'apiKey': os.getenv('OKX_API_KEY'),
-            'secret': os.getenv('OKX_API_SECRET'),
-            'password': os.getenv('OKX_PASSPHRASE'),
-            'enableRateLimit': True,
-            'hostname': 'us.okx.com',
-            'options': {'defaultType': 'spot'}
+    'apiKey': os.getenv('OKX_API_KEY'),
+    'secret': os.getenv('OKX_API_SECRET'),
+    'password': os.getenv('OKX_PASSPHRASE'),
+    'enableRateLimit': True,
+    'hostname': 'us.okx.com',
+    'options': {
+        'defaultType': 'spot',
+        'x-simulated-trading': 0  # Set to 1 if you are using a Demo Key
+    }
+})
         })
         self.symbol = 'DOGE/USDT'
         self.total_bot_budget = 100.0
