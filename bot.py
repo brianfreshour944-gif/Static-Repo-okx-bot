@@ -9,16 +9,17 @@ class OKXAdaptiveGridBot:
         print("--- STARTING ADAPTIVE GRID BOT ---")
 
         self.exchange = ccxt.okx({
-            'apiKey': os.getenv('OKX_API_KEY'),
-            'secret': os.getenv('OKX_API_SECRET'),
-            'password': os.getenv('OKX_PASSPHRASE'),
-            'enableRateLimit': True,
-            'options': {'defaultType': 'spot'}
-        })
+    'apiKey': os.getenv('OKX_API_KEY'),
+    'secret': os.getenv('OKX_API_SECRET'),
+    'password': os.getenv('OKX_PASSPHRASE'),
+    'enableRateLimit': True,
+    'options': {
+        'defaultType': 'spot',
+    }
+})
 
         # IMPORTANT: disable sandbox if you're on real demo OKX
-        self.exchange.set_sandbox_mode(True)
-
+       
         self.symbol = "DOGE/USDT"
 
         # ---------------------------
