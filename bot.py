@@ -12,18 +12,18 @@ class OKXGridBot:
             'secret': os.getenv('OKX_API_SECRET'),
             'password': os.getenv('OKX_PASSPHRASE'),
             'enableRateLimit': True,
+            'hostname': 'app.okx.com',           # ← This is the important fix
             'options': {
-                'defaultType': 'unified',   # Important for your account type
+                'defaultType': 'unified',
             }
         })
         
-        # This must be right after creating the exchange
         self.exchange.set_sandbox_mode(True)
         
         self.symbol = 'DOGE/USDT'
         self.total_budget = 100.0
         self.grid_count = 5
-        self.grid_spacing = 0.002   # ~0.2% spacing
+        self.grid_spacing = 0.002
 
         self.active_buys = {}
         self.active_sells = {}
@@ -32,12 +32,14 @@ class OKXGridBot:
 
     def test_connection(self):
         try:
-            print("🔍 Testing connection to OKX Sandbox (Unified Account)...")
+            print("🔍 Testing connection with app.okx.com...")
             balance = self.exchange.fetch_balance()
             usdt = balance.get('USDT', {}).get('free', 0)
-            print(f"✅ Connected successfully! USDT Balance: {usdt}")
+            print(f"✅ SUCCESS! USDT Balance: {usdt}")
         except Exception as e:
             print(f"❌ Connection Error: {e}")
+
+    # ... rest of the methods stay the same (get_current_price, manage_grid, run) ...
 
     def get_current_price(self):
         try:
@@ -62,7 +64,7 @@ class OKXGridBot:
                 try:
                     order = self.exchange.create_limit_buy_order(self.symbol, qty, price)
                     self.active_buys[price] = order['id']
-                    print(f"✅ BUY order placed at {price}")
+                    print(f"✅ BUY placed at {price}")
                 except Exception as e:
                     print(f"Buy failed at {price}: {e}")
 
@@ -70,21 +72,19 @@ class OKXGridBot:
                 try:
                     order = self.exchange.create_limit_sell_order(self.symbol, qty, price)
                     self.active_sells[price] = order['id']
-                    print(f"✅ SELL order placed at {price}")
+                    print(f"✅ SELL placed at {price}")
                 except Exception as e:
                     print(f"Sell failed at {price}: {e}")
 
     def run(self):
-        print("🤖 OKX Grid Bot Started - Unified Account Mode")
+        print("🤖 OKX Grid Bot Started")
         while True:
             try:
                 price = self.get_current_price()
                 if price:
                     print(f"📊 Current DOGE/USDT: {price:.5f}")
                     self.manage_grid(price)
-
                 time.sleep(30)
-
             except Exception as e:
                 print(f"Loop error: {e}")
                 time.sleep(10)
