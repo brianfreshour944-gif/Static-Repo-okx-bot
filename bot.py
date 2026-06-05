@@ -1,7 +1,7 @@
 import os
 import time
 import ccxt
-import psycopg2  # Make sure this is installed via requirements.txt
+import psycopg2 
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -22,15 +22,16 @@ class OKXGridBot:
         self.total_budget = 100.0
         self.grid_count = 4
         self.grid_spacing = 0.004
-
         self.active_buys = {}
         self.active_sells = {}
-
         self.test_connection()
 
     def log_trade_to_postgres(self, side, price, qty, order_id="N/A"):
         """Logs trades directly to your Coolify PostgreSQL database."""
         db_url = os.getenv('DATABASE_URL')
+        if not db_url:
+            print("❌ DATABASE_URL is missing!")
+            return
         try:
             conn = psycopg2.connect(db_url)
             cur = conn.cursor()
@@ -61,19 +62,16 @@ class OKXGridBot:
             return self.exchange.fetch_ticker(self.symbol)['last']
         except:
             return None
+
     def sync_filled_orders(self):
         try:
-            # OKX requires separate calls for open and closed orders
             closed_orders = self.exchange.fetch_closed_orders(self.symbol, limit=20)
-            
             for order in closed_orders:
-                # We only care about orders that were actually filled
                 if order['status'] == 'closed' and order.get('price'):
                     price = float(order['price'])
                     qty = float(order['amount'])
                     order_id = order['id']
                     
-                    # Logic to log and remove from your active tracking dicts
                     if order['side'] == 'buy' and price in self.active_buys:
                         print(f"✅ BUY FILLED @ {price:.5f}")
                         self.log_trade_to_postgres('BUY', price, qty, order_id)
@@ -83,11 +81,8 @@ class OKXGridBot:
                         print(f"✅ SELL FILLED @ {price:.5f}")
                         self.log_trade_to_postgres('SELL', price, qty, order_id)
                         del self.active_sells[price]
-                        
         except Exception as e:
             print(f"Sync error: {e}")
-
-    # ... (Keep your existing cancel_stale_orders and manage_grid methods here) ...
 
     def run(self):
         print("🤖 OKX Grid Bot Running\n")
@@ -97,8 +92,6 @@ class OKXGridBot:
                 if price:
                     print(f"📊 [{time.strftime('%H:%M:%S')}] Price: {price:.5f}")
                     self.sync_filled_orders()
-                    # self.cancel_stale_orders(price)
-                    # self.manage_grid(price)
                 time.sleep(25)
             except Exception as e:
                 print(f"Loop error: {e}")
