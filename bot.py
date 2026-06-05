@@ -3,25 +3,23 @@ import time
 import sys
 import ccxt
 
-
 class OKXAdaptiveGridBot:
     def __init__(self):
         print("--- STARTING ADAPTIVE GRID BOT ---")
 
-     self.exchange = ccxt.okx({
-    'apiKey': os.getenv('OKX_API_KEY'),
-    'secret': os.getenv('OKX_API_SECRET'),
-    'password': os.getenv('OKX_PASSPHRASE'),
-    'enableRateLimit': True,
-    'hostname': 'us.okx.com',
-    'options': {
-        'defaultType': 'spot',
-        'fetchCurrencies': False   # 🔥 KEY FIX
-    }
-})
+        self.exchange = ccxt.okx({
+            'apiKey': os.getenv('OKX_API_KEY'),
+            'secret': os.getenv('OKX_API_SECRET'),
+            'password': os.getenv('OKX_PASSPHRASE'),
+            'enableRateLimit': True,
+            'hostname': 'us.okx.com',
+            'options': {
+                'defaultType': 'spot',
+                'fetchCurrencies': False   # 🔥 KEY FIX
+            }
+        })
 
         # IMPORTANT: disable sandbox if you're on real demo OKX
-       
         self.symbol = "DOGE/USDT"
 
         # ---------------------------
@@ -140,14 +138,11 @@ class OKXAdaptiveGridBot:
     # PLACE GRID ORDERS
     # ---------------------------
     def place_orders(self, current_price):
-
         for price in self.grid_prices:
-
             # BUY SIDE
             if price < current_price:
                 if price not in self.active_buy_orders:
                     if self.bot_cash > 5:
-
                         spend = self.bot_cash / 10
                         amount = spend / price
 
@@ -157,28 +152,21 @@ class OKXAdaptiveGridBot:
                             )
                             self.active_buy_orders[price] = order["id"]
                             self.bot_cash -= spend
-
                             print(f"BUY placed @ {price}")
-
                         except Exception as e:
                             print(f"BUY error {price}: {e}")
 
             # SELL SIDE
             elif price > current_price:
                 if price not in self.active_sell_orders:
-
                     amount = (self.bot_doge / self.grid_count)
-
                     if amount > 0:
-
                         try:
                             order = self.exchange.create_limit_sell_order(
                                 self.symbol, amount, price
                             )
                             self.active_sell_orders[price] = order["id"]
-
                             print(f"SELL placed @ {price}")
-
                         except Exception as e:
                             print(f"SELL error {price}: {e}")
 
@@ -186,7 +174,6 @@ class OKXAdaptiveGridBot:
     # MAIN LOOP
     # ---------------------------
     def run(self):
-
         while True:
             try:
                 ticker = self.exchange.fetch_ticker(self.symbol)
@@ -205,7 +192,6 @@ class OKXAdaptiveGridBot:
                 print(f"Loop error: {e}")
 
             time.sleep(60)
-
 
 if __name__ == "__main__":
     bot = OKXAdaptiveGridBot()
