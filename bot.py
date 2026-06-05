@@ -62,15 +62,19 @@ class OKXGridBot:
         except:
             return None
 
-    def sync_filled_orders(self):
+ def sync_filled_orders(self):
         try:
-            orders = self.exchange.fetch_orders(self.symbol, limit=100)
-            for order in orders:
+            # OKX requires separate calls for open and closed orders
+            closed_orders = self.exchange.fetch_closed_orders(self.symbol, limit=20)
+            
+            for order in closed_orders:
+                # We only care about orders that were actually filled
                 if order['status'] == 'closed' and order.get('price'):
                     price = float(order['price'])
                     qty = float(order['amount'])
                     order_id = order['id']
                     
+                    # Logic to log and remove from your active tracking dicts
                     if order['side'] == 'buy' and price in self.active_buys:
                         print(f"✅ BUY FILLED @ {price:.5f}")
                         self.log_trade_to_postgres('BUY', price, qty, order_id)
@@ -80,6 +84,7 @@ class OKXGridBot:
                         print(f"✅ SELL FILLED @ {price:.5f}")
                         self.log_trade_to_postgres('SELL', price, qty, order_id)
                         del self.active_sells[price]
+                        
         except Exception as e:
             print(f"Sync error: {e}")
 
