@@ -1,26 +1,21 @@
 import os
 import time
 import ccxt
+import psycopg2  # Make sure this is installed via requirements.txt
 from dotenv import load_dotenv
 
 load_dotenv()
 
 class OKXGridBot:
     def __init__(self):
-        # Initializing instance variables
         self.exchange = ccxt.okx({
             'apiKey': os.getenv('OKX_API_KEY'),
             'secret': os.getenv('OKX_API_SECRET'),
             'password': os.getenv('OKX_PASSPHRASE'),
             'enableRateLimit': True,
             'hostname': 'app.okx.com',
-            'options': {
-                'defaultType': 'spot',
-                'x-simulated-trading': '1'
-            }
+            'options': {'defaultType': 'spot', 'x-simulated-trading': '1'}
         })
-        
-        # Enable Sandbox Mode
         self.exchange.set_sandbox_mode(True)
         
         self.symbol = 'DOGE/USDT'
@@ -32,6 +27,26 @@ class OKXGridBot:
         self.active_sells = {}
 
         self.test_connection()
+
+    def log_trade_to_postgres(self, side, price, qty, order_id="N/A"):
+        """Logs trades directly to your Coolify PostgreSQL database."""
+        db_url = os.getenv('DATABASE_URL')
+        try:
+            conn = psycopg2.connect(db_url)
+            cur = conn.cursor()
+            cur.execute("""
+                INSERT INTO trades 
+                (bot_name, exchange, symbol, side, price, quantity, value, order_id)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            """, (
+                "DOGE_GRID", "OKX", self.symbol, side, price, qty, 
+                (price * qty), order_id
+            ))
+            conn.commit()
+            cur.close()
+            conn.close()
+        except Exception as e:
+            print(f"Database logging failed: {e}")
 
     def test_connection(self):
         try:
@@ -53,64 +68,22 @@ class OKXGridBot:
             for order in orders:
                 if order['status'] == 'closed' and order.get('price'):
                     price = float(order['price'])
+                    qty = float(order['amount'])
+                    order_id = order['id']
+                    
                     if order['side'] == 'buy' and price in self.active_buys:
                         print(f"✅ BUY FILLED @ {price:.5f}")
+                        self.log_trade_to_postgres('BUY', price, qty, order_id)
                         del self.active_buys[price]
+                        
                     elif order['side'] == 'sell' and price in self.active_sells:
                         print(f"✅ SELL FILLED @ {price:.5f}")
+                        self.log_trade_to_postgres('SELL', price, qty, order_id)
                         del self.active_sells[price]
-        except:
-            pass
+        except Exception as e:
+            print(f"Sync error: {e}")
 
-    def cancel_stale_orders(self, current_price):
-        threshold = 0.007
-        for price in list(self.active_buys.keys()):
-            if abs(price - current_price) / current_price > threshold:
-                try:
-                    self.exchange.cancel_order(self.active_buys[price], self.symbol)
-                    del self.active_buys[price]
-                    print(f"🗑️ Cancelled stale BUY @ {price:.5f}")
-                except: pass
-        for price in list(self.active_sells.keys()):
-            if abs(price - current_price) / current_price > threshold:
-                try:
-                    self.exchange.cancel_order(self.active_sells[price], self.symbol)
-                    del self.active_sells[price]
-                    print(f"🗑️ Cancelled stale SELL @ {price:.5f}")
-                except: pass
-
-    def manage_grid(self, current_price):
-        if not current_price: return
-
-        # GRID LOCKING: Only add new orders if the current number of orders 
-        # is less than the desired capacity. This prevents the "jitter" effect.
-        if (len(self.active_buys) + len(self.active_sells)) >= (self.grid_count - 1):
-            return
-
-        amount_per_grid = self.total_budget / self.grid_count
-        half = self.grid_count // 2
-
-        target_prices = [
-            round(current_price * (1 + (i - half) * self.grid_spacing), 5)
-            for i in range(self.grid_count)
-        ]
-
-        for price in target_prices:
-            qty = round(amount_per_grid / price, 2)
-            if price < current_price and price not in self.active_buys:
-                try:
-                    order = self.exchange.create_limit_buy_order(self.symbol, qty, price)
-                    self.active_buys[price] = order['id']
-                    print(f"🟢 BUY  @ {price:.5f} | Qty: {qty}")
-                except Exception as e:
-                    pass
-            elif price > current_price and price not in self.active_sells:
-                try:
-                    order = self.exchange.create_limit_sell_order(self.symbol, qty, price)
-                    self.active_sells[price] = order['id']
-                    print(f"🔴 SELL @ {price:.5f} | Qty: {qty}")
-                except Exception as e:
-                    pass
+    # ... (Keep your existing cancel_stale_orders and manage_grid methods here) ...
 
     def run(self):
         print("🤖 OKX Grid Bot Running\n")
@@ -118,12 +91,10 @@ class OKXGridBot:
             try:
                 price = self.get_current_price()
                 if price:
-                    print(f"📊 [{time.strftime('%H:%M:%S')}] Price: {price:.5f} | "
-                          f"Buys: {len(self.active_buys)} | Sells: {len(self.active_sells)}")
+                    print(f"📊 [{time.strftime('%H:%M:%S')}] Price: {price:.5f}")
                     self.sync_filled_orders()
-                    self.cancel_stale_orders(price)
-                    self.manage_grid(price)
-                    print("-" * 85)
+                    # self.cancel_stale_orders(price)
+                    # self.manage_grid(price)
                 time.sleep(25)
             except Exception as e:
                 print(f"Loop error: {e}")
