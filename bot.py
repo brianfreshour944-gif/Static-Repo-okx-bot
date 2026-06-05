@@ -4,8 +4,23 @@ import sys
 import ccxt
 
 class OKXAdaptiveGridBot:
-    def __init__(self):
+ def __init__(self):
         print("--- STARTING ADAPTIVE GRID BOT ---")
+        
+        # DEBUG: Check if hostname is defined
+        config = {
+            'apiKey': os.getenv('OKX_API_KEY'),
+            'secret': os.getenv('OKX_API_SECRET'),
+            'password': os.getenv('OKX_PASSPHRASE'),
+            'enableRateLimit': True,
+            'hostname': 'us.okx.com', # <--- Check if this line is here
+            'options': {'defaultType': 'spot', 'fetchCurrencies': False}
+        }
+        
+        print(f"DEBUG: Hostname is set to: {config.get('hostname', 'NOT SET')}")
+        
+        self.exchange = ccxt.okx(config)
+        # ... rest of your init ...
 
        self.exchange = ccxt.okx({
             'apiKey': os.getenv('OKX_API_KEY'),
