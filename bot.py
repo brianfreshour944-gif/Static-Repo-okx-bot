@@ -13,18 +13,31 @@ class OKXGridBot:
             'password': os.getenv('OKX_PASSPHRASE'),
             'enableRateLimit': True,
             'options': {
-                'defaultType': 'spot',
+                'defaultType': 'unified',   # Important for your account type
             }
         })
-        self.exchange.set_sandbox_mode(True)   # Remove this line for live trading
-
+        
+        # This must be right after creating the exchange
+        self.exchange.set_sandbox_mode(True)
+        
         self.symbol = 'DOGE/USDT'
         self.total_budget = 100.0
         self.grid_count = 5
-        self.grid_spacing = 0.002   # Adjust based on volatility
+        self.grid_spacing = 0.002   # ~0.2% spacing
 
         self.active_buys = {}
         self.active_sells = {}
+
+        self.test_connection()
+
+    def test_connection(self):
+        try:
+            print("🔍 Testing connection to OKX Sandbox (Unified Account)...")
+            balance = self.exchange.fetch_balance()
+            usdt = balance.get('USDT', {}).get('free', 0)
+            print(f"✅ Connected successfully! USDT Balance: {usdt}")
+        except Exception as e:
+            print(f"❌ Connection Error: {e}")
 
     def get_current_price(self):
         try:
@@ -49,28 +62,27 @@ class OKXGridBot:
                 try:
                     order = self.exchange.create_limit_buy_order(self.symbol, qty, price)
                     self.active_buys[price] = order['id']
-                    print(f"✅ Placed BUY at {price}")
+                    print(f"✅ BUY order placed at {price}")
                 except Exception as e:
-                    print(f"Buy error at {price}: {e}")
+                    print(f"Buy failed at {price}: {e}")
 
             elif price > current_price and price not in self.active_sells:
                 try:
                     order = self.exchange.create_limit_sell_order(self.symbol, qty, price)
                     self.active_sells[price] = order['id']
-                    print(f"✅ Placed SELL at {price}")
+                    print(f"✅ SELL order placed at {price}")
                 except Exception as e:
-                    print(f"Sell error at {price}: {e}")
+                    print(f"Sell failed at {price}: {e}")
 
     def run(self):
-        print("🤖 OKX Grid Bot Started (Polling mode)")
+        print("🤖 OKX Grid Bot Started - Unified Account Mode")
         while True:
             try:
                 price = self.get_current_price()
                 if price:
-                    print(f"Current price: {price:.5f}")
+                    print(f"📊 Current DOGE/USDT: {price:.5f}")
                     self.manage_grid(price)
 
-                # Check every 30 seconds
                 time.sleep(30)
 
             except Exception as e:
@@ -81,5 +93,3 @@ class OKXGridBot:
 if __name__ == "__main__":
     bot = OKXGridBot()
     bot.run()
-    bot = OKXDynamicGridBot()
-    asyncio.run(bot.run())
