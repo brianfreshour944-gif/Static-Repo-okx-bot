@@ -8,20 +8,21 @@ class OKXNativeClassicGridBot:
         print("--- RUNTIME DIAGNOSTIC CHECK ---")
         # Ensure your environment variables are set in your shell
         print(f"OKX_API_KEY Found: {bool(os.getenv('OKX_API_KEY'))}")
-        print("--------------------------------")
-
-        # Initialize exchange ONCE with US-specific hostname
-        # REMOVED: self.exchange.set_sandbox_mode(True) - this causes 50101 errors
+        
+        # Define the exchange ONCE with the correct US hostname
+        # REMOVED: self.exchange.set_sandbox_mode(True) - this prevents 50101 errors
         self.exchange = ccxt.okx({
             'apiKey': os.getenv('OKX_API_KEY'),
             'secret': os.getenv('OKX_API_SECRET'),
             'password': os.getenv('OKX_PASSPHRASE'),
             'enableRateLimit': True,
-            'hostname': 'us.okx.com',  # MANDATORY for OKX US
+            'hostname': 'us.okx.com',  # MANDATORY for OKX US accounts
             'options': {
                 'defaultType': 'spot'
             }
         })
+        
+        # ... rest of your initialization ...
 
         self.symbol = 'DOGE/USDT'
         self.total_bot_budget = 100.0
