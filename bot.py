@@ -3,19 +3,25 @@ import time
 import ccxt
 
 class OKXDynamicGridBot:
-    def __init__(self):
+   def __init__(self):
         self.exchange = ccxt.okx({
             'apiKey': os.getenv('OKX_API_KEY'),
             'secret': os.getenv('OKX_API_SECRET'),
             'password': os.getenv('OKX_PASSPHRASE'),
             'enableRateLimit': True,
-            # DO NOT use us.okx.com for demo unless you are specifically 
-            # testing on the US demo portal; otherwise, remove 'hostname'
+            # REMOVE 'hostname': 'us.okx.com'
             'options': {
                 'defaultType': 'spot',
-                'x-simulated-trading': 1  # Crucial for Demo Mode
+                'x-simulated-trading': 1  # Mandatory: This tells OKX you are using Demo keys
             }
         })
+        
+        # This tells CCXT to use the Sandbox endpoints
+        self.exchange.set_sandbox_mode(True)
+        
+        self.symbol = 'DOGE/USDT'
+        self.total_bot_budget = 100.0
+        # ... rest of your __init__ variables
         
         # This tells CCXT to map your requests to the Testnet
         self.exchange.set_sandbox_mode(True)
