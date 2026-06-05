@@ -3,27 +3,19 @@ import time
 import ccxt
 
 class OKXDynamicGridBot:
-   def __init__(self):
+    def __init__(self):
         self.exchange = ccxt.okx({
             'apiKey': os.getenv('OKX_API_KEY'),
             'secret': os.getenv('OKX_API_SECRET'),
             'password': os.getenv('OKX_PASSPHRASE'),
             'enableRateLimit': True,
-            # REMOVE 'hostname': 'us.okx.com'
             'options': {
                 'defaultType': 'spot',
-                'x-simulated-trading': 1  # Mandatory: This tells OKX you are using Demo keys
+                'x-simulated-trading': 1  # Mandatory for Demo keys
             }
         })
         
         # This tells CCXT to use the Sandbox endpoints
-        self.exchange.set_sandbox_mode(True)
-        
-        self.symbol = 'DOGE/USDT'
-        self.total_bot_budget = 100.0
-        # ... rest of your __init__ variables
-        
-        # This tells CCXT to map your requests to the Testnet
         self.exchange.set_sandbox_mode(True)
         
         self.symbol = 'DOGE/USDT'
@@ -85,13 +77,11 @@ class OKXDynamicGridBot:
 
     def deploy_missing_grid_lines(self):
         try:
-            # Calculate amount per grid (using roughly 33 USDT per grid for a 100 USDT budget)
             amount_per_grid = (self.total_bot_budget / len(self.grid_prices))
             ticker = self.exchange.fetch_ticker(self.symbol)
             current_price = ticker['last']
 
             for price in self.grid_prices:
-                # Need to calculate quantity based on price
                 qty = round(amount_per_grid / price, 1)
                 
                 if price < current_price and price not in self.active_buy_orders:
