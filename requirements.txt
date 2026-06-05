@@ -1,3 +1,4 @@
 ccxt
+git+https://github.com/kroitor/ccxt.pro.git#subdirectory=python
+python-dotenv
 pandas
-ccxt-pro
