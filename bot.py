@@ -18,12 +18,12 @@ class OKXDynamicGridBot:
         self.upper_bound = 0.08800
         self.grid_count = 3
         self.grid_prices = self.calculate_grid_prices()
-        self.active_buy_orders = {}
-        self.active_sell_orders = {}
+        self.active_buy_orders = {}  # {price: order_id}
+        self.active_sell_orders = {} # {price: order_id}
 
     def calculate_grid_prices(self):
         step = (self.upper_bound - self.lower_bound) / (self.grid_count - 1)
-        return [self.lower_bound + (i * step) for i in range(self.grid_count)]
+        return [round(self.lower_bound + (i * step), 5) for i in range(self.grid_count)]
 
     def cancel_stale_orders(self):
         try:
@@ -34,10 +34,12 @@ class OKXDynamicGridBot:
                 if price < current_price * (1 - threshold):
                     self.exchange.cancel_order(order_id, self.symbol)
                     del self.active_buy_orders[price]
+                    print(f"Cleanup: Cancelled stale BUY at {price}")
             for price, order_id in list(self.active_sell_orders.items()):
                 if price > current_price * (1 + threshold):
                     self.exchange.cancel_order(order_id, self.symbol)
                     del self.active_sell_orders[price]
+                    print(f"Cleanup: Cancelled stale SELL at {price}")
         except Exception as e:
             print(f"Cleanup Error: {e}")
 
@@ -51,18 +53,41 @@ class OKXDynamicGridBot:
         time.sleep(total_sleep)
 
     def sync_and_check_fills(self):
-        pass # Add your balance update logic here
+        try:
+            # Check Buy Fills
+            for price, order_id in list(self.active_buy_orders.items()):
+                order = self.exchange.fetch_order(order_id, self.symbol)
+                if order['status'] == 'closed':
+                    print(f"Fill confirmed: Bought at {price}")
+                    del self.active_buy_orders[price]
+            # Check Sell Fills
+            for price, order_id in list(self.active_sell_orders.items()):
+                order = self.exchange.fetch_order(order_id, self.symbol)
+                if order['status'] == 'closed':
+                    print(f"Fill confirmed: Sold at {price}")
+                    del self.active_sell_orders[price]
+        except Exception as e:
+            print(f"Sync Error: {e}")
 
     def deploy_missing_grid_lines(self):
         try:
-            current_price = self.exchange.fetch_ticker(self.symbol)['last']
+            # Calculate amount per grid (using roughly 33 USDT per grid for a 100 USDT budget)
+            amount_per_grid = (self.total_bot_budget / len(self.grid_prices))
+            ticker = self.exchange.fetch_ticker(self.symbol)
+            current_price = ticker['last']
+
             for price in self.grid_prices:
+                # Need to calculate quantity based on price
+                qty = round(amount_per_grid / price, 1)
+                
                 if price < current_price and price not in self.active_buy_orders:
-                    # Place Buy Logic
-                    pass
+                    order = self.exchange.create_limit_buy_order(self.symbol, qty, price)
+                    self.active_buy_orders[price] = order['id']
+                    print(f"Placed Buy at {price}")
                 elif price > current_price and price not in self.active_sell_orders:
-                    # Place Sell Logic
-                    pass
+                    order = self.exchange.create_limit_sell_order(self.symbol, qty, price)
+                    self.active_sell_orders[price] = order['id']
+                    print(f"Placed Sell at {price}")
         except Exception as e:
             print(f"Deployment Error: {e}")
 
@@ -76,7 +101,6 @@ class OKXDynamicGridBot:
             except Exception as e:
                 print(f"Loop Error: {e}")
             
-            # This ensures we always sync at the end of the 15m candle
             self.sleep_until_next_interval(15)
 
 if __name__ == '__main__':
