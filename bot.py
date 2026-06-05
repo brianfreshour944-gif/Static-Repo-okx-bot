@@ -43,12 +43,14 @@ class OKXNativeClassicGridBot:
 
         self.bootstrap_initial_balances()
 
+   class OKXNativeClassicGridBot:
+    def __init__(self):
+        # ... (code indented by 4 spaces)
+        pass # All code here must be aligned to the same 4-space column
+
     def calculate_grid_prices(self):
+        # ... (all code here must also be aligned to a 4-space column)
         prices = []
-        step = (self.upper_bound - self.lower_bound) / (self.grid_count - 1)
-        for i in range(self.grid_count):
-            price = self.lower_bound + (step * i)
-            prices.append(round(price, 5))
         return prices
 
     def bootstrap_initial_balances(self):
