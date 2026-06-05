@@ -7,14 +7,18 @@ load_dotenv()
 
 class OKXGridBot:
     def __init__(self):
-        self.exchange = ccxt.okx({
+       self.exchange = ccxt.okx({
             'apiKey': os.getenv('OKX_API_KEY'),
             'secret': os.getenv('OKX_API_SECRET'),
             'password': os.getenv('OKX_PASSPHRASE'),
             'enableRateLimit': True,
-            'hostname': 'app.okx.com',           # ← This is the important fix
+            'hostname': 'app.okx.com',
             'options': {
                 'defaultType': 'unified',
+                'x-simulated-trading': 1, # Keep this
+            },
+            'headers': {
+                'x-simulated-trading': '1' # ADD THIS LINE HERE
             }
         })
         
