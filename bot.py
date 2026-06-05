@@ -8,13 +8,15 @@ class OKXAdaptiveGridBot:
     def __init__(self):
         print("--- STARTING ADAPTIVE GRID BOT ---")
 
-        self.exchange = ccxt.okx({
+     self.exchange = ccxt.okx({
     'apiKey': os.getenv('OKX_API_KEY'),
     'secret': os.getenv('OKX_API_SECRET'),
     'password': os.getenv('OKX_PASSPHRASE'),
     'enableRateLimit': True,
+    'hostname': 'us.okx.com',
     'options': {
         'defaultType': 'spot',
+        'fetchCurrencies': False   # 🔥 KEY FIX
     }
 })
 
