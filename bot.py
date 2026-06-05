@@ -20,7 +20,7 @@ class OKXGridBot:
         
         self.symbol = 'DOGE/USDT'
         self.total_budget = 100.0
-        self.grid_count = 4          # Reduced for cleaner grid
+        self.grid_count = 4
         self.grid_spacing = 0.002
 
         self.active_buys = {}
@@ -44,24 +44,26 @@ class OKXGridBot:
             return None
 
     def sync_filled_orders(self):
-        """Check which orders were filled"""
+        """Detect filled orders"""
         try:
-            orders = self.exchange.fetch_orders(self.symbol, limit=20)
+            orders = self.exchange.fetch_orders(self.symbol, limit=50)
             for order in orders:
-                if order['status'] == 'closed':
-                    price = order['price']
+                if order['status'] == 'closed' and order['price']:
+                    price = float(order['price'])
                     side = order['side']
+                    filled = float(order.get('filled', 0))
+                    
                     if side == 'buy' and price in self.active_buys:
-                        print(f"✅ BUY FILLED @ {price}")
+                        print(f"✅ BUY FILLED @ {price} | +{filled:.2f} DOGE")
                         del self.active_buys[price]
                     elif side == 'sell' and price in self.active_sells:
-                        print(f"✅ SELL FILLED @ {price}")
+                        print(f"✅ SELL FILLED @ {price} | +{filled*price:.2f} USDT")
                         del self.active_sells[price]
-        except Exception as e:
-            pass  # Silent for now
+        except:
+            pass
 
     def cancel_stale_orders(self, current_price):
-        threshold = 0.006  # Tighter cleanup
+        threshold = 0.006
         for price in list(self.active_buys.keys()):
             if abs(price - current_price) / current_price > threshold:
                 try:
@@ -91,36 +93,36 @@ class OKXGridBot:
             price = round(current_price * (1 + (i - half) * self.grid_spacing), 5)
             qty = round(amount_per_grid / price, 2)
 
-            if price < current_price and price not in self.active_buys and len(self.active_buys) < 6:
+            if price < current_price and price not in self.active_buys and len(self.active_buys) < 5:
                 try:
                     order = self.exchange.create_limit_buy_order(self.symbol, qty, price)
                     self.active_buys[price] = order['id']
-                    print(f"🟢 BUY  @ {price} | Qty: {qty}")
+                    print(f"🟢 BUY  placed @ {price} | Qty: {qty}")
                 except:
                     pass
 
-            elif price > current_price and price not in self.active_sells and len(self.active_sells) < 6:
+            elif price > current_price and price not in self.active_sells and len(self.active_sells) < 5:
                 try:
                     order = self.exchange.create_limit_sell_order(self.symbol, qty, price)
                     self.active_sells[price] = order['id']
-                    print(f"🔴 SELL @ {price} | Qty: {qty}")
+                    print(f"🔴 SELL placed @ {price} | Qty: {qty}")
                 except:
                     pass
 
     def run(self):
-        print("🤖 OKX Grid Bot Running (Improved Cleanup + Fill Detection)\n")
+        print("🤖 OKX Grid Bot Running (Final Logging + Fill Detection)\n")
         
         while True:
             try:
                 price = self.get_current_price()
                 if price:
                     print(f"📊 [{time.strftime('%H:%M:%S')}] Price: {price:.5f} | "
-                          f"Buys: {len(self.active_buys)} | Sells: {len(self.active_sells)}")
+                          f"Active Buys: {len(self.active_buys)} | Active Sells: {len(self.active_sells)}")
 
                     self.sync_filled_orders()
                     self.cancel_stale_orders(price)
                     self.manage_grid(price)
-                    print("-" * 90)
+                    print("-" * 85)
 
                 time.sleep(25)
 
