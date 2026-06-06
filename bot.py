@@ -1,3 +1,4 @@
+
 #!/usr/bin/env python3
 import os
 import time
@@ -25,37 +26,44 @@ class OKXGridBot:
         
         # Track processed orders
         self.processed_order_ids = set()
-        self.active_buys = {}
-        self.active_sells = {}
-
-        # INITIALIZATION STEPS
+        
+        # INITIALIZATION
         self.test_connection()
-        self.log_bot_startup() # <--- HEARTBEAT TRIGGERED HERE
 
-    def log_bot_startup(self):
-        """Logs a system heartbeat to the database."""
+    def check_status(self):
+        """Heartbeat and Kill Switch check for the bot_status table."""
         db_url = os.getenv('DATABASE_URL')
-        if not db_url:
-            return
+        if not db_url: return
         try:
             conn = psycopg2.connect(db_url)
             cur = conn.cursor()
-            cur.execute("""
-                INSERT INTO trades 
-                (bot_name, exchange, symbol, side, price, quantity, value, order_id, timestamp)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, NOW())
-            """, (self.bot_name, "OKX", 'N/A', 'SYSTEM', 0.0, 0.0, 0.0, 'STARTUP_SIGNAL'))
+            
+            # 1. Update Heartbeat (Upsert)
+            cur.execute('''
+                INSERT INTO bot_status (bot_name, last_update, status)
+                VALUES (%s, NOW(), 'RUNNING')
+                ON CONFLICT (bot_name) 
+                DO UPDATE SET last_update = NOW(), status = EXCLUDED.status;
+            ''', (self.bot_name,))
+            
+            # 2. Check for Kill Switch
+            cur.execute("SELECT status FROM bot_status WHERE bot_name = %s", (self.bot_name,))
+            row = cur.fetchone()
+            if row and row[0] == 'STOP':
+                print(f"🛑 Kill switch activated for {self.bot_name}. Shutting down.")
+                cur.close()
+                conn.close()
+                exit(0) # Terminate the process
+                
             conn.commit()
             cur.close()
             conn.close()
-            print(f"✅ [{self.bot_name}] Heartbeat logged to DB.")
         except Exception as e:
-            print(f"❌ Heartbeat failed: {e}")
+            print(f"❌ Heartbeat/Kill-Switch failed: {e}")
 
     def log_trade_to_postgres(self, side, price, qty, order_id="N/A"):
         db_url = os.getenv('DATABASE_URL')
-        if not db_url:
-            return
+        if not db_url: return
         try:
             conn = psycopg2.connect(db_url)
             cur = conn.cursor()
@@ -109,6 +117,9 @@ class OKXGridBot:
         print(f"🤖 {self.bot_name} Running\n")
         while True:
             try:
+                # HEARTBEAT & KILL SWITCH CHECK
+                self.check_status()
+                
                 price = self.get_current_price()
                 if price:
                     print(f"📊 [{time.strftime('%H:%M:%S')}] Price: {price:.5f}")
