@@ -1,11 +1,14 @@
+#!/usr/bin/env python3
 import os
 import time
-import pandas as pd
-import sys
-import ccxt
 import logging
+import pandas as pd
+import ccxt
 import psycopg2
-from datetime import datetime
+import sys
+from dotenv import load_dotenv
+
+load_dotenv()
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s | %(levelname)s | %(message)s')
@@ -14,8 +17,7 @@ logger = logging.getLogger(__name__)
 # --- DATABASE LOGGING ENGINE ---
 def log_trade_to_db(bot_name, symbol, side, price, quantity, value, order_id):
     db_url = os.getenv('DATABASE_URL')
-    if not db_url:
-        return
+    if not db_url: return
     try:
         with psycopg2.connect(db_url) as conn:
             with conn.cursor() as cur:
@@ -26,6 +28,31 @@ def log_trade_to_db(bot_name, symbol, side, price, quantity, value, order_id):
                 conn.commit()
     except Exception as e:
         logger.error(f"Database write error: {e}")
+
+def check_status(bot_name):
+    """Heartbeat and Kill Switch check for the bot_status table."""
+    db_url = os.getenv('DATABASE_URL')
+    if not db_url: return
+    try:
+        with psycopg2.connect(db_url) as conn:
+            with conn.cursor() as cur:
+                # 1. Heartbeat
+                cur.execute('''
+                    INSERT INTO bot_status (bot_name, last_update, status)
+                    VALUES (%s, NOW(), 'RUNNING')
+                    ON CONFLICT (bot_name) 
+                    DO UPDATE SET last_update = NOW(), status = EXCLUDED.status;
+                ''', (bot_name,))
+                
+                # 2. Kill Switch
+                cur.execute("SELECT status FROM bot_status WHERE bot_name = %s", (bot_name,))
+                row = cur.fetchone()
+                if row and row[0] == 'STOP':
+                    logger.warning(f"🛑 Kill switch activated for {bot_name}. Shutting down.")
+                    sys.exit(0)
+                conn.commit()
+    except Exception as e:
+        logger.error(f"Heartbeat failed: {e}")
 
 class OKXDynamicGridBot:
     def __init__(self):
@@ -40,36 +67,11 @@ class OKXDynamicGridBot:
             'hostname': 'us.okx.com',
             'options': {'defaultType': 'spot'}
         })
-        
         self.exchange.set_sandbox_mode(True)
-        self.symbol = 'DOGE/USDT'
-        self.total_bot_budget = 100.0  
-        self.number_of_grids = 4
-        self.capital_per_grid = self.total_bot_budget / self.number_of_grids  
         
-        self.bot_cash = 100.0          
-        self.bot_doge = 0.0            
-        self.purchased_batches = []
-        self.grid_percentage = 0.015  
-        self.current_buy_order = None
-        self.current_sell_order = None
-
-        self.log_bot_startup()
-
-    def log_bot_startup(self):
-        """Signals to database that this specific bot is live."""
-        db_url = os.getenv('DATABASE_URL')
-        try:
-            with psycopg2.connect(db_url) as conn:
-                with conn.cursor() as cur:
-                    cur.execute("""
-                        INSERT INTO trades (bot_name, exchange, symbol, side, price, quantity, value, order_id, timestamp)
-                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, NOW())
-                    """, (self.bot_name, 'OKX', 'N/A', 'SYSTEM', 0.0, 0.0, 0.0, 'STARTUP_SIGNAL'))
-                    conn.commit()
-            logger.info(f"[{self.bot_name}] Heartbeat: Logged to DB.")
-        except Exception as e:
-            logger.error(f"Startup log failed: {e}")
+        self.symbol = 'DOGE/USDT'
+        # Perform initial health check
+        check_status(self.bot_name)
 
     def get_moving_average_center(self):
         try:
@@ -82,17 +84,13 @@ class OKXDynamicGridBot:
 
     def start_loop(self):
         logger.info(f"Starting {self.bot_name} loop...")
-        last_ma_update_time = 0
-        ma_update_interval = 900 
-
         while True:
             try:
-                if time.time() - last_ma_update_time >= ma_update_interval:
-                    # self.update_grid_positions() # Ensure this uses log_trade_to_db!
-                    last_ma_update_time = time.time()
-                else:
-                    # self.sync_and_audit_fills() # Ensure this uses log_trade_to_db!
-                    pass
+                # HEARTBEAT & KILL SWITCH CHECK
+                check_status(self.bot_name)
+                
+                # ... [Grid logic here]
+                
             except Exception as e:
                 logger.error(f"Main loop error: {e}")
             time.sleep(15)
