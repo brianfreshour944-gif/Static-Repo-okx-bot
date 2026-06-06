@@ -23,13 +23,34 @@ class OKXGridBot:
         self.bot_name = os.getenv('BOT_NAME', 'DOGE_GRID_BOT')
         self.symbol = 'DOGE/USDT'
         
-        # Track processed orders to prevent duplicate database entries
+        # Track processed orders
         self.processed_order_ids = set()
-        
         self.active_buys = {}
         self.active_sells = {}
 
+        # INITIALIZATION STEPS
         self.test_connection()
+        self.log_bot_startup() # <--- HEARTBEAT TRIGGERED HERE
+
+    def log_bot_startup(self):
+        """Logs a system heartbeat to the database."""
+        db_url = os.getenv('DATABASE_URL')
+        if not db_url:
+            return
+        try:
+            conn = psycopg2.connect(db_url)
+            cur = conn.cursor()
+            cur.execute("""
+                INSERT INTO trades 
+                (bot_name, exchange, symbol, side, price, quantity, value, order_id, timestamp)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, NOW())
+            """, (self.bot_name, "OKX", 'N/A', 'SYSTEM', 0.0, 0.0, 0.0, 'STARTUP_SIGNAL'))
+            conn.commit()
+            cur.close()
+            conn.close()
+            print(f"✅ [{self.bot_name}] Heartbeat logged to DB.")
+        except Exception as e:
+            print(f"❌ Heartbeat failed: {e}")
 
     def log_trade_to_postgres(self, side, price, qty, order_id="N/A"):
         db_url = os.getenv('DATABASE_URL')
@@ -38,11 +59,10 @@ class OKXGridBot:
         try:
             conn = psycopg2.connect(db_url)
             cur = conn.cursor()
-            # Note: Ensure this matches your DB table columns
             cur.execute("""
                 INSERT INTO trades 
-                (bot_name, exchange, symbol, side, price, quantity, value, order_id)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                (bot_name, exchange, symbol, side, price, quantity, value, order_id, timestamp)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, NOW())
             """, (
                 self.bot_name, "OKX", self.symbol, side, price, qty, 
                 (price * qty), order_id
@@ -72,23 +92,16 @@ class OKXGridBot:
             closed_orders = self.exchange.fetch_closed_orders(self.symbol, limit=20)
             for order in closed_orders:
                 order_id = order['id']
-                
-                # Check if we already processed this order
                 if order_id in self.processed_order_ids:
                     continue
-                
                 if order['status'] == 'closed' and order.get('price'):
                     price = float(order['price'])
                     qty = float(order['amount'])
                     side = order['side'].upper()
                     
-                    # Log to DB
                     self.log_trade_to_postgres(side, price, qty, order_id)
-                    
-                    # Mark as processed
                     self.processed_order_ids.add(order_id)
                     print(f"✅ {side} FILLED & LOGGED @ {price:.5f}")
-                    
         except Exception as e:
             print(f"Sync error: {e}")
 
