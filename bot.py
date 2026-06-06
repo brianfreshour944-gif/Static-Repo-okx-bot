@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 import os
 import time
 import ccxt
@@ -8,6 +9,7 @@ load_dotenv()
 
 class OKXGridBot:
     def __init__(self):
+        # Configuration from Environment Variables
         self.exchange = ccxt.okx({
             'apiKey': os.getenv('OKX_API_KEY'),
             'secret': os.getenv('OKX_API_SECRET'),
@@ -18,11 +20,12 @@ class OKXGridBot:
         })
         self.exchange.set_sandbox_mode(True)
         
+        self.bot_name = os.getenv('BOT_NAME', 'DOGE_GRID_BOT')
         self.symbol = 'DOGE/USDT'
-        self.total_budget = 100.0
-        self.grid_count = 4
-        self.grid_spacing = 0.004
-
+        
+        # Track processed orders to prevent duplicate database entries
+        self.processed_order_ids = set()
+        
         self.active_buys = {}
         self.active_sells = {}
 
@@ -35,12 +38,13 @@ class OKXGridBot:
         try:
             conn = psycopg2.connect(db_url)
             cur = conn.cursor()
+            # Note: Ensure this matches your DB table columns
             cur.execute("""
                 INSERT INTO trades 
                 (bot_name, exchange, symbol, side, price, quantity, value, order_id)
                 VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
             """, (
-                "DOGE_GRID", "OKX", self.symbol, side, price, qty, 
+                self.bot_name, "OKX", self.symbol, side, price, qty, 
                 (price * qty), order_id
             ))
             conn.commit()
@@ -67,24 +71,29 @@ class OKXGridBot:
         try:
             closed_orders = self.exchange.fetch_closed_orders(self.symbol, limit=20)
             for order in closed_orders:
+                order_id = order['id']
+                
+                # Check if we already processed this order
+                if order_id in self.processed_order_ids:
+                    continue
+                
                 if order['status'] == 'closed' and order.get('price'):
                     price = float(order['price'])
                     qty = float(order['amount'])
-                    order_id = order['id']
+                    side = order['side'].upper()
                     
-                    if order['side'] == 'buy' and price in self.active_buys:
-                        print(f"✅ BUY FILLED @ {price:.5f}")
-                        self.log_trade_to_postgres('BUY', price, qty, order_id)
-                        del self.active_buys[price]
-                    elif order['side'] == 'sell' and price in self.active_sells:
-                        print(f"✅ SELL FILLED @ {price:.5f}")
-                        self.log_trade_to_postgres('SELL', price, qty, order_id)
-                        del self.active_sells[price]
+                    # Log to DB
+                    self.log_trade_to_postgres(side, price, qty, order_id)
+                    
+                    # Mark as processed
+                    self.processed_order_ids.add(order_id)
+                    print(f"✅ {side} FILLED & LOGGED @ {price:.5f}")
+                    
         except Exception as e:
             print(f"Sync error: {e}")
 
     def run(self):
-        print("🤖 OKX Grid Bot Running\n")
+        print(f"🤖 {self.bot_name} Running\n")
         while True:
             try:
                 price = self.get_current_price()
