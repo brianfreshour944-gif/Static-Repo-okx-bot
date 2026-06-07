@@ -55,7 +55,11 @@ class GridBot:
             'password': os.getenv('OKX_PASSPHRASE'),
             'hostname': 'app.okx.com',
             'enableRateLimit': True,
-            'options': {'defaultType': 'spot'}
+            'options': {
+                'defaultType': 'spot',
+                # FORCE the WebSocket to the Demo/Sandbox endpoint
+                'ws': 'wss://wspap.okx.com:8443/ws/v5/public?brokerId=9999'
+            }
         })
         self.exchange.set_sandbox_mode(True)
         self.active_orders = {}
