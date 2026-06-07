@@ -153,7 +153,7 @@ class OKXGridBot:
         print(f"🌐 Grid refreshed. Center price: {price:.8f}")
 
     def sync_filled_orders(self):
-    try:
+        try:
         closed_orders = self.exchange.fetch_closed_orders(self.symbol, limit=50)
         db_url = os.getenv('DATABASE_URL')
         min_profit_pct = 0.8  # minimum profit after fees (adjust as needed)
