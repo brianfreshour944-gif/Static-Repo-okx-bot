@@ -70,19 +70,19 @@ def log_error(msg):
 # ====================== GRID BOT ======================
 class GridBot:
     def __init__(self):
-    self.exchange = ccxt.okx({
-        'apiKey': os.getenv('OKX_API_KEY'),
-        'secret': os.getenv('OKX_API_SECRET'),
-        'password': os.getenv('OKX_PASSPHRASE'),
-        'hostname': 'www.okx.com',   # Use 'app.okx.com' if needed
-        'enableRateLimit': True,
-        'options': {'defaultType': 'spot', 'x-simulated-trading': '1'}
-    })
-    self.exchange.set_sandbox_mode(True)
-    self.active_orders = {}
-    self.running = True
-    self.net_pnl = 0.0
-    self.peak_equity = None
+        self.exchange = ccxt.okx({
+            'apiKey': os.getenv('OKX_API_KEY'),
+            'secret': os.getenv('OKX_API_SECRET'),
+            'password': os.getenv('OKX_PASSPHRASE'),
+            'hostname': 'www.okx.com',   # Use 'app.okx.com' if needed
+            'enableRateLimit': True,
+            'options': {'defaultType': 'spot', 'x-simulated-trading': '1'}
+        })
+        self.exchange.set_sandbox_mode(True)
+        self.active_orders = {}
+        self.running = True
+        self.net_pnl = 0.0
+        self.peak_equity = None
 
     # ---------- Order Management ----------
     async def place_order(self, side, price, amount):
@@ -125,7 +125,7 @@ class GridBot:
                         else:
                             trade_pnl = value - fee
                         self.net_pnl += trade_pnl
-                        update_daily_loss(trade_pnl)   # also updates bot_status.daily_loss
+                        update_daily_loss(trade_pnl)
 
                         # Log trade
                         log_trade(BOT_NAME, 'OKX', SYMBOL, side, filled_price, amount, value, fee, order['id'])
@@ -187,20 +187,15 @@ class GridBot:
 
             # 5. Drawdown protection (requires current equity = cash + unrealized)
             try:
-                # Fetch current balance and positions to estimate unrealized P&L
                 balance = await self.exchange.fetch_balance()
                 usdt_balance = balance['USDT']['free'] if 'USDT' in balance else 0
-                # Get current price of the asset
                 ticker = await self.exchange.fetch_ticker(SYMBOL)
                 current_price = ticker['last']
-                # Sum up holdings of the base currency (e.g., DOGE)
                 base_currency = SYMBOL.split('/')[0]
                 base_balance = balance[base_currency]['free'] if base_currency in balance else 0
-                # Market value of base holdings
                 base_value = base_balance * current_price
-                # Total equity (cash + base value)
                 equity = usdt_balance + base_value
-                # For grid bot we also have open orders that may not be included, but this is approximate.
+
                 if self.peak_equity is None:
                     self.peak_equity = equity
                 else:
@@ -222,7 +217,7 @@ class GridBot:
         for i in range(1, GRID_LEVELS + 1):
             buy_price = mid * (1 - i * GRID_SPACING)
             sell_price = mid * (1 + i * GRID_SPACING)
-            amount = BASE_ORDER_SIZE / mid   # roughly constant USD value
+            amount = BASE_ORDER_SIZE / mid
             if MIN_PRICE <= buy_price <= MAX_PRICE:
                 await self.place_order('buy', buy_price, amount)
             if MIN_PRICE <= sell_price <= MAX_PRICE:
@@ -233,22 +228,18 @@ class GridBot:
         await self.exchange.load_markets()
         logger.info(f"Bot started: {BOT_NAME} on {SYMBOL}")
 
-        # Check dashboard status before starting
         status = get_bot_status()
         if status['status'] != 'RUNNING':
             logger.info("Bot is STOPPED in database. Exiting.")
             return
 
-        # Initial order placement
         await self.deploy_initial_grid()
 
-        # Run both: WebSocket listener + safety monitor
         await asyncio.gather(
             self.watch_orders(),
             self.safety_monitor()
         )
 
-        # When loop exits, clean up
         logger.info("Stopping bot – cancelling all orders...")
         await self.cancel_all_orders()
         logger.info("Bot exited cleanly.")
