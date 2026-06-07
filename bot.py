@@ -49,19 +49,21 @@ def get_bot_status():
 # ====================== GRID BOT ======================
 class GridBot:
     def __init__(self):
+        # 1. Use the live hostname, NOT sandbox
         self.exchange = ccxt.okx({
             'apiKey': os.getenv('OKX_API_KEY'),
             'secret': os.getenv('OKX_API_SECRET'),
             'password': os.getenv('OKX_PASSPHRASE'),
+            'hostname': 'www.okx.com', 
             'enableRateLimit': True,
             'options': {
                 'defaultType': 'spot',
-                # This ID (9999) is the standard identifier for OKX Sandbox/Demo
-                'brokerId': '9999' 
+                # Remove sandbox: True and brokerId: 9999
             }
         })
-        # This triggers the sandbox mode for the entire library
-        self.exchange.set_sandbox_mode(True)
+        
+        # 2. DO NOT use set_sandbox_mode(True)
+        # self.exchange.set_sandbox_mode(True) 
         
         self.active_orders = {}
         self.running = True
@@ -69,7 +71,9 @@ class GridBot:
 
     async def place_order(self, side, price, amount):
         try:
-            params = {'postOnly': True} if POST_ONLY else {}
+            # Force the Live server to treat this as a simulation order
+            params = {'postOnly': True, 'headers': {'x-simulated-trading': '1'}}
+            
             order = await self.exchange.create_order(SYMBOL, 'limit', side, amount, price, params)
             self.active_orders[order['id']] = {'side': side, 'price': price, 'amount': amount}
             logger.info(f"Placed {side} {amount:.2f} @ {price:.6f}")
