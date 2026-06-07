@@ -53,17 +53,13 @@ class GridBot:
             'apiKey': os.getenv('OKX_API_KEY'),
             'secret': os.getenv('OKX_API_SECRET'),
             'password': os.getenv('OKX_PASSPHRASE'),
-            'hostname': 'us.okx.com',  # Explicitly force the US-specific domain
+            'hostname': 'us.okx.com', # Use the correct US portal domain
             'enableRateLimit': True,
             'options': {
                 'defaultType': 'spot',
             }
         })
-        
-        # DO NOT use set_sandbox_mode(True)
-        self.active_orders = {}
-        self.running = True
-        self.net_pnl = 0.0
+        # REMOVE self.exchange.set_sandbox_mode(True) entirely
         
         self.active_orders = {}
         self.running = True
@@ -71,13 +67,12 @@ class GridBot:
 
     async def place_order(self, side, price, amount):
         try:
-            # This header is the standard way to trigger simulated trading
             params = {
                 'postOnly': True,
-                'headers': {'x-simulated-trading': '1'}
+                'headers': {'x-simulated-trading': '1'} # The "Magic" Header
             }
-            
             order = await self.exchange.create_order(SYMBOL, 'limit', side, amount, price, params)
+            # ... rest of your code
             self.active_orders[order['id']] = {'side': side, 'price': price, 'amount': amount}
             logger.info(f"Placed {side} {amount:.2f} @ {price:.6f}")
             return order
