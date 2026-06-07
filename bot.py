@@ -3,7 +3,6 @@ import os
 import time
 import ccxt
 import psycopg2
-from collections import defaultdict
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -22,21 +21,15 @@ class OKXGridBot:
 
         self.bot_name = os.getenv('BOT_NAME', 'Static-Repo-okx-bot')
         self.symbol = 'DOGE/USDT'
-        self.grid_levels = 5
-        self.grid_step_percent = 3.0          # Wide enough to (hopefully) cover fees
+        self.grid_levels = 3               # only 3 levels each side
+        self.grid_step_percent = 4.0       # wide enough for demo fees
         self.order_amount_usdt = 10
         
-        self.active_order_ids = set()
         self.processed_order_ids = set()
-        # Track last fill price per side to avoid repeated fills at same level
-        self.last_buy_fill_price = 0.0
-        self.last_sell_fill_price = 0.0
-        self.min_price_move = 0.005            # 0.5% minimum move before placing opposite order
-
         self.test_connection()
         self.update_grid_orders()
 
-    # ---------- DATABASE HELPERS (unchanged) ----------
+    # ---------- DATABASE HELPERS ----------
     def log_error_to_db(self, error_msg):
         db_url = os.getenv('DATABASE_URL')
         if not db_url: return
@@ -109,13 +102,6 @@ class OKXGridBot:
     def cancel_all_open_orders(self):
         try:
             self.exchange.cancel_all_orders(self.symbol)
-            self.active_order_ids.clear()
-            db_url = os.getenv('DATABASE_URL')
-            if db_url:
-                with psycopg2.connect(db_url) as conn:
-                    with conn.cursor() as cur:
-                        cur.execute("UPDATE bot_orders SET status = 'CANCELLED' WHERE bot_name = %s AND status = 'OPEN'", (self.bot_name,))
-                        conn.commit()
             print("✅ Cancelled all open orders")
         except Exception as e:
             self.log_error_to_db(f"Cancel orders error: {e}")
@@ -137,24 +123,24 @@ class OKXGridBot:
                                 VALUES (%s, %s, %s, %s, %s, 'OPEN')
                             """, (order['id'], self.bot_name, self.symbol, side, price))
                             conn.commit()
-                self.active_order_ids.add(order['id'])
                 print(f"📌 Placed {side.upper()} order @ {price:.8f} (qty {qty}) for {self.bot_name}")
             except Exception as e:
                 self.log_error_to_db(f"Failed to place {side} order: {e}")
 
     def update_grid_orders(self):
         price = self.get_current_price()
-        if not price: return
+        if not price:
+            return
         self.cancel_all_open_orders()
         grid = self.calculate_grid_prices(price)
         self.place_grid_orders(grid)
         print(f"🌐 Grid refreshed. Center price: {price:.8f}")
 
     def sync_filled_orders(self):
+        """Only log fills – NO replacement. Grid will refresh in 60 seconds."""
         try:
             closed_orders = self.exchange.fetch_closed_orders(self.symbol, limit=50)
             db_url = os.getenv('DATABASE_URL')
-            min_profit_pct = 1.8   # must exceed total fee % (~1.7%)
             for order in closed_orders:
                 order_id = order['id']
                 if order_id in self.processed_order_ids:
@@ -177,58 +163,6 @@ class OKXGridBot:
 
                     self.processed_order_ids.add(order_id)
                     print(f"✅ {side} FILLED @ {price:.8f} (qty {qty}, fee {fee:.6f})")
-
-                    # --- NEW: prevent repeated fills at nearly same price ---
-                    if side == 'BUY':
-                        if abs(price - self.last_buy_fill_price) / price < self.min_price_move:
-                            print(f"⚠️ Skipping replacement – price {price:.8f} too close to last buy fill {self.last_buy_fill_price:.8f}")
-                            continue
-                        self.last_buy_fill_price = price
-                    else:
-                        if abs(price - self.last_sell_fill_price) / price < self.min_price_move:
-                            print(f"⚠️ Skipping replacement – price {price:.8f} too close to last sell fill {self.last_sell_fill_price:.8f}")
-                            continue
-                        self.last_sell_fill_price = price
-
-                    # --- Place opposite order with min profit requirement ---
-                    opposite_side = 'buy' if side == 'SELL' else 'sell'
-                    if side == 'BUY':
-                        target_sell = price * (1 + min_profit_pct / 100)
-                        grid_sell = price * (1 + self.grid_step_percent / 100)
-                        new_price = max(target_sell, grid_sell)
-                    else:  # SELL filled
-                        target_buy = price * (1 - min_profit_pct / 100)
-                        grid_buy = price * (1 - self.grid_step_percent / 100)
-                        new_price = min(target_buy, grid_buy)
-                    new_price = round(new_price, 8)
-
-                    # Optional safety: avoid placing orders that are immediately marketable
-                    current_mid = self.get_current_price()
-                    if current_mid:
-                        if opposite_side == 'sell' and new_price <= current_mid:
-                            print(f"⚠️ Skipping sell placement @ {new_price} (below market {current_mid})")
-                            continue
-                        elif opposite_side == 'buy' and new_price >= current_mid:
-                            print(f"⚠️ Skipping buy placement @ {new_price} (above market {current_mid})")
-                            continue
-
-                    try:
-                        if opposite_side == 'buy':
-                            new_order = self.exchange.create_limit_buy_order(self.symbol, qty, new_price)
-                        else:
-                            new_order = self.exchange.create_limit_sell_order(self.symbol, qty, new_price)
-
-                        if db_url:
-                            with psycopg2.connect(db_url) as conn:
-                                with conn.cursor() as cur:
-                                    cur.execute("""
-                                        INSERT INTO bot_orders (order_id, bot_name, symbol, side, price, status)
-                                        VALUES (%s, %s, %s, %s, %s, 'OPEN')
-                                    """, (new_order['id'], self.bot_name, self.symbol, opposite_side, new_price))
-                                    conn.commit()
-                        print(f"🔄 Replaced {side} with {opposite_side.upper()} at {new_price:.8f} (min profit {min_profit_pct}%)")
-                    except Exception as e:
-                        self.log_error_to_db(f"Failed to replace order: {e}")
         except Exception as e:
             self.log_error_to_db(f"Sync error: {e}")
 
@@ -250,6 +184,7 @@ class OKXGridBot:
                 current_price = self.get_current_price()
                 if current_price:
                     self.sync_filled_orders()
+                    # Refresh grid every 60 seconds (moves with the market)
                     if time.time() - last_grid_refresh > 60:
                         self.update_grid_orders()
                         last_grid_refresh = time.time()
