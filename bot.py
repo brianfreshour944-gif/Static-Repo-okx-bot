@@ -3,31 +3,23 @@ import ccxt.pro as ccxt
 import os
 import logging
 from sqlalchemy import create_engine, text
-from datetime import datetime
 
 # ====================== CONFIGURATION ======================
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("GridBot")
 
-# Database
 DATABASE_URL = os.getenv("DATABASE_URL", "").replace("postgresql+psycopg2://", "postgresql://")
 engine = create_engine(DATABASE_URL)
 
-# Bot Settings
 BOT_NAME = "okx_grid_bot"
 SYMBOL = "DOGE/USDT"
 GRID_LEVELS = 5
-GRID_SPACING = 0.01       # 1%
-BASE_ORDER_SIZE = 100     # USDT per order
+GRID_SPACING = 0.01
+BASE_ORDER_SIZE = 100
 MIN_PRICE = 0.08
 MAX_PRICE = 0.12
 POST_ONLY = True
-
-# Stop & Profit Settings
-STOP_LOSS_AMOUNT = -50    # USD
-TAKE_PROFIT_AMOUNT = 100  # USD
-MAX_DRAWDOWN_PCT = 15     # %
-CHECK_INTERVAL = 5        # seconds
+CHECK_INTERVAL = 5
 
 # ====================== DATABASE HELPERS ======================
 def log_trade(bot_name, exchange, symbol, side, price, quantity, value, fee, order_id):
@@ -52,37 +44,23 @@ def get_bot_status():
         row = result.fetchone()
         if row:
             return {"status": row[0], "daily_loss": row[1] or 0, "daily_loss_limit": row[2] or 100}
-        else:
-            conn.execute(text("""
-                INSERT INTO bot_status (bot_name, status, daily_loss, daily_loss_limit, config)
-                VALUES (:name, 'STOP', 0, 100, '{}')
-            """), {"name": BOT_NAME})
-            conn.commit()
-            return {"status": "STOP", "daily_loss": 0, "daily_loss_limit": 100}
-
-def log_error(msg):
-    with engine.connect() as conn:
-        conn.execute(text("INSERT INTO bot_errors (bot_name, error_message, timestamp) VALUES (:name, :msg, NOW())"),
-                     {"name": BOT_NAME, "msg": msg})
-        conn.commit()
+        return {"status": "STOP", "daily_loss": 0, "daily_loss_limit": 100}
 
 # ====================== GRID BOT ======================
 class GridBot:
     def __init__(self):
-        # Initializing for US Demo Trading
-       self.exchange = ccxt.okx({
-    'apiKey': os.getenv('OKX_API_KEY'),
-    'secret': os.getenv('OKX_API_SECRET'),
-    'password': os.getenv('OKX_PASSPHRASE'),
-    'hostname': 'app.okx.com',  # Try 'us.okx.com' if 'app.okx.com' fails
-    'enableRateLimit': True,
-    'options': {'defaultType': 'spot'}
-})
-self.exchange.set_sandbox_mode(True)
+        self.exchange = ccxt.okx({
+            'apiKey': os.getenv('OKX_API_KEY'),
+            'secret': os.getenv('OKX_API_SECRET'),
+            'password': os.getenv('OKX_PASSPHRASE'),
+            'hostname': 'app.okx.com',
+            'enableRateLimit': True,
+            'options': {'defaultType': 'spot'}
+        })
+        self.exchange.set_sandbox_mode(True)
         self.active_orders = {}
         self.running = True
         self.net_pnl = 0.0
-        self.peak_equity = None
 
     async def place_order(self, side, price, amount):
         try:
@@ -93,7 +71,6 @@ self.exchange.set_sandbox_mode(True)
             return order
         except Exception as e:
             logger.error(f"Order placement failed: {e}")
-            log_error(f"place_order failed: {e}")
             return None
 
     async def cancel_all_orders(self):
@@ -113,12 +90,6 @@ self.exchange.set_sandbox_mode(True)
                         filled_price = float(order['average'])
                         amount = float(order['filled'])
                         side = order['side']
-                        fee = float(order['fee']['cost']) if order.get('fee') else 0.0
-                        value = amount * filled_price
-                        trade_pnl = (-value - fee) if side == 'buy' else (value - fee)
-                        self.net_pnl += trade_pnl
-                        update_daily_loss(trade_pnl)
-                        log_trade(BOT_NAME, 'OKX', SYMBOL, side, filled_price, amount, value, fee, order['id'])
                         del self.active_orders[order['id']]
                         await self.place_opposite_order(side, filled_price, amount)
             except Exception as e:
@@ -129,15 +100,6 @@ self.exchange.set_sandbox_mode(True)
         new_price = price * (1 + GRID_SPACING) if filled_side == 'buy' else price * (1 - GRID_SPACING)
         if MIN_PRICE <= new_price <= MAX_PRICE:
             await self.place_order('sell' if filled_side == 'buy' else 'buy', new_price, amount)
-
-    async def safety_monitor(self):
-        while self.running:
-            await asyncio.sleep(CHECK_INTERVAL)
-            status = get_bot_status()
-            if status['status'] != 'RUNNING':
-                self.running = False
-                break
-            # Add other safety checks here...
 
     async def deploy_initial_grid(self):
         ticker = await self.exchange.fetch_ticker(SYMBOL)
@@ -152,7 +114,7 @@ self.exchange.set_sandbox_mode(True)
         logger.info(f"Bot started: {BOT_NAME}")
         if get_bot_status()['status'] == 'RUNNING':
             await self.deploy_initial_grid()
-            await asyncio.gather(self.watch_orders(), self.safety_monitor())
+            await self.watch_orders()
         await self.cancel_all_orders()
 
 if __name__ == "__main__":
