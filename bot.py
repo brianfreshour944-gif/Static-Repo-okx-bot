@@ -61,7 +61,7 @@ def log_trade_to_postgres(self, side, price, qty, order_id, fee=0.0):
         except Exception as e:
             self.log_error_to_db(f"Trade log error: {e}")
 
-    def sync_filled_orders(self):
+def sync_filled_orders(self):
         try:
             closed_orders = self.exchange.fetch_closed_orders(self.symbol, limit=50)
             db_url = os.getenv('DATABASE_URL')
