@@ -21,13 +21,12 @@ class OKXGridBot:
 
         self.bot_name = os.getenv('BOT_NAME', 'DOGE_GRID_BOT')
         self.symbol = 'DOGE/USDT'
-        self.grid_levels = 5          # number of buy/sell orders on each side
-        self.grid_step_percent = 0.5  # 0.5% between levels
-        self.order_amount_usdt = 10   # amount in USDT per order (adjust based on your balance)
+        self.grid_levels = 5
+        self.grid_step_percent = 0.5
+        self.order_amount_usdt = 10
         
-        # Track open order IDs to avoid duplicates
         self.active_order_ids = set()
-        self.processed_order_ids = set()  # for logging already filled orders
+        self.processed_order_ids = set()
 
         self.test_connection()
         self.update_grid_orders()
@@ -63,7 +62,6 @@ class OKXGridBot:
             self.log_error_to_db(f"Trade log error: {e}")
 
     def check_status(self):
-        """Stop bot if database status == 'STOP'"""
         db_url = os.getenv('DATABASE_URL')
         if not db_url: return
         try:
@@ -78,7 +76,6 @@ class OKXGridBot:
                     cur.execute("SELECT status FROM bot_status WHERE bot_name = %s", (self.bot_name,))
                     row = cur.fetchone()
                     if row and row[0] == 'STOP':
-                        print(f"🛑 Kill switch activated. Shutting down.")
                         exit(0)
         except Exception as e:
             print(f"⚠️ Status check failed: {e}")
@@ -94,11 +91,9 @@ class OKXGridBot:
 
     def calculate_grid_prices(self, center_price):
         grid_prices = []
-        # Buy levels (below center)
         for i in range(1, self.grid_levels + 1):
             price = center_price * (1 - (self.grid_step_percent / 100) * i)
             grid_prices.append(('buy', round(price, 8)))
-        # Sell levels (above center)
         for i in range(1, self.grid_levels + 1):
             price = center_price * (1 + (self.grid_step_percent / 100) * i)
             grid_prices.append(('sell', round(price, 8)))
@@ -108,67 +103,95 @@ class OKXGridBot:
         try:
             self.exchange.cancel_all_orders(self.symbol)
             self.active_order_ids.clear()
+            # Update DB to mark old orders as CLOSED/CANCELLED
+            db_url = os.getenv('DATABASE_URL')
+            if db_url:
+                with psycopg2.connect(db_url) as conn:
+                    with conn.cursor() as cur:
+                        cur.execute("UPDATE bot_orders SET status = 'CANCELLED' WHERE bot_name = %s AND status = 'OPEN'", (self.bot_name,))
+                        conn.commit()
             print("✅ Cancelled all open orders")
         except Exception as e:
             self.log_error_to_db(f"Cancel orders error: {e}")
 
     def place_grid_orders(self, grid_prices):
-        """Place limit orders for each grid level"""
+        db_url = os.getenv('DATABASE_URL')
         for side, price in grid_prices:
-            # Calculate quantity based on fixed USDT amount
-            qty = round(self.order_amount_usdt / price, 2)  # DOGE decimals: 2 is safe
+            qty = round(self.order_amount_usdt / price, 2)
             try:
                 if side == 'buy':
                     order = self.exchange.create_limit_buy_order(self.symbol, qty, price)
                 else:
                     order = self.exchange.create_limit_sell_order(self.symbol, qty, price)
+                
+                # Tag order in DB
+                if db_url:
+                    with psycopg2.connect(db_url) as conn:
+                        with conn.cursor() as cur:
+                            cur.execute("""
+                                INSERT INTO bot_orders (order_id, bot_name, symbol, side, price, status)
+                                VALUES (%s, %s, %s, %s, %s, 'OPEN')
+                            """, (order['id'], self.bot_name, self.symbol, side, price))
+                            conn.commit()
+
                 self.active_order_ids.add(order['id'])
-                print(f"📌 Placed {side.upper()} order @ {price:.8f} (qty {qty})")
+                print(f"📌 Placed {side.upper()} order @ {price:.8f} (qty {qty}) for {self.bot_name}")
             except Exception as e:
-                self.log_error_to_db(f"Failed to place {side} order at {price}: {e}")
+                self.log_error_to_db(f"Failed to place {side} order: {e}")
 
     def update_grid_orders(self):
-        """Refresh the entire grid (cancel old, place new based on current price)"""
         price = self.get_current_price()
-        if not price:
-            return
+        if not price: return
         self.cancel_all_open_orders()
         grid = self.calculate_grid_prices(price)
         self.place_grid_orders(grid)
         print(f"🌐 Grid refreshed. Center price: {price:.8f}")
 
     def sync_filled_orders(self):
-        """Check for filled orders and replace them with opposite orders"""
         try:
             closed_orders = self.exchange.fetch_closed_orders(self.symbol, limit=50)
+            db_url = os.getenv('DATABASE_URL')
             for order in closed_orders:
                 order_id = order['id']
-                if order_id in self.processed_order_ids:
-                    continue
+                if order_id in self.processed_order_ids: continue
                 if order['status'] == 'closed' and order.get('price'):
                     price = float(order['price'])
                     qty = float(order['amount'])
                     side = order['side'].upper()
+                    
                     self.log_trade_to_postgres(side, price, qty, order_id)
+                    
+                    # Mark order as CLOSED in DB
+                    if db_url:
+                        with psycopg2.connect(db_url) as conn:
+                            with conn.cursor() as cur:
+                                cur.execute("UPDATE bot_orders SET status = 'CLOSED' WHERE order_id = %s", (order_id,))
+                                conn.commit()
+                    
                     self.processed_order_ids.add(order_id)
                     print(f"✅ {side} FILLED @ {price:.8f} (qty {qty})")
 
-                    # --- Re‑place opposite order to keep grid alive ---
+                    # Replace opposite order
                     opposite_side = 'buy' if side == 'SELL' else 'sell'
-                    # Use the same price (fill price) for the new limit order
                     try:
                         if opposite_side == 'buy':
                             new_order = self.exchange.create_limit_buy_order(self.symbol, qty, price)
                         else:
                             new_order = self.exchange.create_limit_sell_order(self.symbol, qty, price)
-                        self.active_order_ids.add(new_order['id'])
-                        print(f"🔄 Replaced {side} order with new {opposite_side.upper()} @ {price:.8f}")
+                        
+                        # Add new order to tracking
+                        if db_url:
+                            with psycopg2.connect(db_url) as conn:
+                                with conn.cursor() as cur:
+                                    cur.execute("INSERT INTO bot_orders (order_id, bot_name, symbol, side, price, status) VALUES (%s, %s, %s, %s, %s, 'OPEN')", 
+                                                (new_order['id'], self.bot_name, self.symbol, opposite_side, price))
+                                    conn.commit()
+                        print(f"🔄 Replaced {side} with {opposite_side.upper()} @ {price:.8f}")
                     except Exception as e:
                         self.log_error_to_db(f"Failed to replace order: {e}")
         except Exception as e:
             self.log_error_to_db(f"Sync error: {e}")
 
-    # ---------- MAIN LOOP ----------
     def test_connection(self):
         try:
             balance = self.exchange.fetch_balance()
@@ -180,24 +203,17 @@ class OKXGridBot:
 
     def run(self):
         print(f"🤖 {self.bot_name} - Grid Bot Started")
-        print(f"   Levels: {self.grid_levels} | Step: {self.grid_step_percent}% | Amount per order: {self.order_amount_usdt} USDT")
         last_grid_refresh = time.time()
         while True:
             try:
                 self.check_status()
                 current_price = self.get_current_price()
                 if current_price:
-                    print(f"📊 [{time.strftime('%H:%M:%S')}] Price: {current_price:.8f}")
-
-                # Sync filled orders every cycle
-                self.sync_filled_orders()
-
-                # Refresh the entire grid every 60 seconds (in case price moves too far)
-                if time.time() - last_grid_refresh > 60:
-                    self.update_grid_orders()
-                    last_grid_refresh = time.time()
-
-                time.sleep(10)  # check every 10 seconds
+                    self.sync_filled_orders()
+                    if time.time() - last_grid_refresh > 60:
+                        self.update_grid_orders()
+                        last_grid_refresh = time.time()
+                time.sleep(10)
             except Exception as e:
                 self.log_error_to_db(f"Main loop error: {e}")
                 time.sleep(10)
