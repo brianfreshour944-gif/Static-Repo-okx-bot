@@ -19,7 +19,8 @@ class OKXGridBot:
         })
         self.exchange.set_sandbox_mode(True)
 
-        self.bot_name = os.getenv('BOT_NAME', 'DOGE_GRID_BOT')
+        self.bot_name = os.getenv('BOT_NAME', 'Static-Repo-okx-bot
+')
         self.symbol = 'DOGE/USDT'
         self.grid_levels = 5
         self.grid_step_percent = 0.5
