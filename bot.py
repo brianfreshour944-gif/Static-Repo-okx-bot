@@ -70,24 +70,51 @@ def log_error(msg):
 # ====================== GRID BOT ======================
 class GridBot:
     # ---------- Grid Bot Initialization ----------
+    # ---------- Grid Bot Initialization ----------
     def __init__(self):
         self.exchange = ccxt.okx({
             'apiKey': os.getenv('OKX_API_KEY'),
             'secret': os.getenv('OKX_API_SECRET'),
             'password': os.getenv('OKX_PASSPHRASE'),
-            'hostname': 'demo-gop.okx.com',  # <--- SET TO DEMO HOST
+            'hostname': 'www.okx.com',  # Use the primary reliable gateway
             'enableRateLimit': True,
             'options': {
-                'defaultType': 'spot'
+                'defaultType': 'spot',
+                'headers': {'x-simulated-trading': '1'} # This tells OKX you are in Demo Mode
             }
         })
-        # Remove or set to False, as we are now using the dedicated Demo Host
+        # Disable sandbox_mode as it conflicts with the simulation header
         self.exchange.set_sandbox_mode(False) 
 
         self.active_orders = {}
         self.running = True
         self.net_pnl = 0.0
         self.peak_equity = None
+
+    # ---------- Main Run ----------
+    async def run(self):
+        # We wrap in try...finally to ensure the connection closes even if the bot crashes
+        try:
+            # Replace load_markets() if it continues to fail
+            await self.exchange.load_markets()
+            logger.info(f"Bot started: {BOT_NAME} on {SYMBOL}")
+
+            status = get_bot_status()
+            if status['status'] != 'RUNNING':
+                logger.info("Bot is STOPPED in database. Exiting.")
+                return
+
+            await self.deploy_initial_grid()
+
+            await asyncio.gather(
+                self.watch_orders(),
+                self.safety_monitor()
+            )
+        finally:
+            logger.info("Stopping bot – cancelling all orders and closing connection...")
+            await self.cancel_all_orders()
+            await self.exchange.close() # CRITICAL: This fixes the "Unclosed client session" error
+            logger.info("Bot exited cleanly.")
 
     # ---------- Order Management ----------
     async def place_order(self, side, price, amount):
