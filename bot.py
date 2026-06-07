@@ -1,4 +1,3 @@
-
 #!/usr/bin/env python3
 import os
 import time
@@ -23,7 +22,7 @@ class OKXGridBot:
         self.bot_name = os.getenv('BOT_NAME', 'Static-Repo-okx-bot')
         self.symbol = 'DOGE/USDT'
         self.grid_levels = 5
-        self.grid_step_percent = 1.0
+        self.grid_step_percent = 2.0          # INCREASED to 2% (was 0.5%)
         self.order_amount_usdt = 10
         
         self.active_order_ids = set()
@@ -32,7 +31,7 @@ class OKXGridBot:
         self.test_connection()
         self.update_grid_orders()
 
-    # ---------- DATABASE HELPERS ----------
+    # ---------- DATABASE HELPERS (unchanged) ----------
     def log_error_to_db(self, error_msg):
         db_url = os.getenv('DATABASE_URL')
         if not db_url: return
@@ -63,20 +62,17 @@ class OKXGridBot:
             self.log_error_to_db(f"Trade log error: {e}")
 
     def check_status(self):
-        """Kill switch: if DB says STOP, exit."""
         db_url = os.getenv('DATABASE_URL')
         if not db_url: return
         try:
             with psycopg2.connect(db_url) as conn:
                 with conn.cursor() as cur:
-                    # Update heartbeat
                     cur.execute("""
                         INSERT INTO bot_status (bot_name, last_update, status)
                         VALUES (%s, NOW(), 'RUNNING')
                         ON CONFLICT (bot_name) 
                         DO UPDATE SET last_update = NOW(), status = EXCLUDED.status
                     """, (self.bot_name,))
-                    # Check for STOP
                     cur.execute("SELECT status FROM bot_status WHERE bot_name = %s", (self.bot_name,))
                     row = cur.fetchone()
                     if row and row[0] == 'STOP':
@@ -109,7 +105,6 @@ class OKXGridBot:
         try:
             self.exchange.cancel_all_orders(self.symbol)
             self.active_order_ids.clear()
-            # Update DB to mark old orders as CANCELLED
             db_url = os.getenv('DATABASE_URL')
             if db_url:
                 with psycopg2.connect(db_url) as conn:
@@ -129,8 +124,6 @@ class OKXGridBot:
                     order = self.exchange.create_limit_buy_order(self.symbol, qty, price)
                 else:
                     order = self.exchange.create_limit_sell_order(self.symbol, qty, price)
-                
-                # Tag order in DB
                 if db_url:
                     with psycopg2.connect(db_url) as conn:
                         with conn.cursor() as cur:
@@ -139,7 +132,6 @@ class OKXGridBot:
                                 VALUES (%s, %s, %s, %s, %s, 'OPEN')
                             """, (order['id'], self.bot_name, self.symbol, side, price))
                             conn.commit()
-
                 self.active_order_ids.add(order['id'])
                 print(f"📌 Placed {side.upper()} order @ {price:.8f} (qty {qty}) for {self.bot_name}")
             except Exception as e:
@@ -157,7 +149,7 @@ class OKXGridBot:
         try:
             closed_orders = self.exchange.fetch_closed_orders(self.symbol, limit=50)
             db_url = os.getenv('DATABASE_URL')
-            min_profit_pct = 0.8  # minimum profit after fees (adjust as needed)
+            min_profit_pct = 1.8   # must exceed total fee % (~1.7%)
             for order in closed_orders:
                 order_id = order['id']
                 if order_id in self.processed_order_ids:
@@ -181,10 +173,9 @@ class OKXGridBot:
                     self.processed_order_ids.add(order_id)
                     print(f"✅ {side} FILLED @ {price:.8f} (qty {qty}, fee {fee:.6f})")
 
-                    # --- FIX: place opposite order only if profitable enough ---
+                    # --- Place opposite order with min profit requirement ---
                     opposite_side = 'buy' if side == 'SELL' else 'sell'
                     if side == 'BUY':
-                        # Required sell price to cover fees and make min profit
                         target_sell = price * (1 + min_profit_pct / 100)
                         grid_sell = price * (1 + self.grid_step_percent / 100)
                         new_price = max(target_sell, grid_sell)
@@ -194,7 +185,7 @@ class OKXGridBot:
                         new_price = min(target_buy, grid_buy)
                     new_price = round(new_price, 8)
 
-                    # Skip if the new price would be worse than current market (optional safety)
+                    # Optional safety: avoid placing orders that are immediately marketable
                     current_mid = self.get_current_price()
                     if current_mid:
                         if opposite_side == 'sell' and new_price <= current_mid:
