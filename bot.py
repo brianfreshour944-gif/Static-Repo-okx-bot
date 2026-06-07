@@ -124,10 +124,15 @@ class OKXGridBot:
         for side, price in grid_prices:
             qty = round(self.order_amount_usdt / price, 2)
             try:
-                if side == 'buy':
-                    order = self.exchange.create_limit_buy_order(self.symbol, qty, price)
-                else:
-                    order = self.exchange.create_limit_sell_order(self.symbol, qty, price)
+               # Inside sync_filled_orders, after a buy fills:
+if side == 'BUY':
+    # Place sell order at a tighter spread (e.g., 0.3% instead of 0.5%)
+    sell_price = price * (1 + (self.grid_step_percent / 100) * 0.6)  # 60% of the step
+    new_order = self.exchange.create_limit_sell_order(self.symbol, qty, sell_price)
+    print(f"🔄 Replaced BUY with SELL at {sell_price:.8f} (original {price:.8f})")
+else:
+    # For a sell fill, place buy at original price (standard)
+    new_order = self.exchange.create_limit_buy_order(self.symbol, qty, price)
                 
                 # Tag order in DB
                 if db_url:
