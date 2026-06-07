@@ -23,7 +23,7 @@ class OKXGridBot:
         self.bot_name = os.getenv('BOT_NAME', 'Static-Repo-okx-bot')
         self.symbol = 'DOGE/USDT'
         self.grid_levels = 5
-        self.grid_step_percent = 0.5
+        self.grid_step_percent = 1.0
         self.order_amount_usdt = 10
         
         self.active_order_ids = set()
