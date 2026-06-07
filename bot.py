@@ -117,7 +117,7 @@ class OKXGridBot:
                         conn.commit()
             print("✅ Cancelled all open orders")
         except Exception as e:
-            self.log_error_to_db(f"Cancel orders error: {e}")
+        self.log_error_to_db(f"Cancel orders error: {e}")
 
     def place_grid_orders(self, grid_prices):
         db_url = os.getenv('DATABASE_URL')
