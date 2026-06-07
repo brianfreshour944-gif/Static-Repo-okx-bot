@@ -115,12 +115,17 @@ class GridBot:
             await self.place_order('sell', mid * (1 + i * GRID_SPACING), amount)
 
     async def run(self):
-        await self.exchange.load_markets()
-        
-        # Explicitly authenticate the WebSocket connection
-        # This uses the credentials already loaded in self.exchange
-        if self.exchange.has['ws']:
-            await self.exchange.authenticate()
+        try:
+            await self.exchange.load_markets()
+            logger.info(f"Bot started: {BOT_NAME}")
+            
+            if get_bot_status()['status'] == 'RUNNING':
+                await self.deploy_initial_grid()
+                # Watch orders will handle auth internally if configured correctly
+                await self.watch_orders()
+        finally:
+            await self.cancel_all_orders()
+            await self.exchange.close()
             logger.info("WebSocket authenticated successfully.")
         
         logger.info(f"Bot started: {BOT_NAME}")
