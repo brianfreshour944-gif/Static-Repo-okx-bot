@@ -18,33 +18,13 @@ GRID_SPACING = 0.01
 BASE_ORDER_SIZE = 100
 MIN_PRICE = 0.08
 MAX_PRICE = 0.12
-POST_ONLY = True
-CHECK_INTERVAL = 5
 
 # ====================== DATABASE HELPERS ======================
-def log_trade(bot_name, exchange, symbol, side, price, quantity, value, fee, order_id):
-    with engine.connect() as conn:
-        conn.execute(text("""
-            INSERT INTO trades (bot_name, exchange, symbol, side, price, quantity, value, fee, order_id, timestamp)
-            VALUES (:bot, :ex, :sym, :side, :price, :qty, :val, :fee, :oid, NOW())
-        """), {"bot": bot_name, "ex": exchange, "sym": symbol, "side": side, "price": price,
-               "qty": quantity, "val": value, "fee": fee, "oid": order_id})
-        conn.commit()
-
-def update_daily_loss(amount):
-    with engine.connect() as conn:
-        conn.execute(text("UPDATE bot_status SET daily_loss = daily_loss + :amt WHERE bot_name = :name"),
-                     {"amt": amount, "name": BOT_NAME})
-        conn.commit()
-
 def get_bot_status():
     with engine.connect() as conn:
-        result = conn.execute(text("SELECT status, daily_loss, daily_loss_limit FROM bot_status WHERE bot_name = :name"),
-                              {"name": BOT_NAME})
+        result = conn.execute(text("SELECT status FROM bot_status WHERE bot_name = :name"), {"name": BOT_NAME})
         row = result.fetchone()
-        if row:
-            return {"status": row[0], "daily_loss": row[1] or 0, "daily_loss_limit": row[2] or 100}
-        return {"status": "STOP", "daily_loss": 0, "daily_loss_limit": 100}
+        return {"status": row[0] if row else "STOP"}
 
 # ====================== GRID BOT ======================
 class GridBot:
@@ -53,26 +33,20 @@ class GridBot:
             'apiKey': os.getenv('OKX_API_KEY'),
             'secret': os.getenv('OKX_API_SECRET'),
             'password': os.getenv('OKX_PASSPHRASE'),
-            'hostname': 'us.okx.com', # Use the correct US portal domain
+            'hostname': 'app.okx.com',
             'enableRateLimit': True,
             'options': {
                 'defaultType': 'spot',
             }
         })
-        # REMOVE self.exchange.set_sandbox_mode(True) entirely
-        
         self.active_orders = {}
         self.running = True
-        self.net_pnl = 0.0
 
     async def place_order(self, side, price, amount):
         try:
-            params = {
-                'postOnly': True,
-                'headers': {'x-simulated-trading': '1'} # The "Magic" Header
-            }
+            # Magic Header to force Simulation on Production infrastructure
+            params = {'postOnly': True, 'headers': {'x-simulated-trading': '1'}}
             order = await self.exchange.create_order(SYMBOL, 'limit', side, amount, price, params)
-            # ... rest of your code
             self.active_orders[order['id']] = {'side': side, 'price': price, 'amount': amount}
             logger.info(f"Placed {side} {amount:.2f} @ {price:.6f}")
             return order
@@ -84,8 +58,8 @@ class GridBot:
         for oid in list(self.active_orders.keys()):
             try:
                 await self.exchange.cancel_order(oid, SYMBOL)
-            except Exception as e:
-                logger.warning(f"Could not cancel {oid}: {e}")
+            except:
+                pass
         self.active_orders.clear()
 
     async def watch_orders(self):
@@ -98,15 +72,11 @@ class GridBot:
                         amount = float(order['filled'])
                         side = order['side']
                         del self.active_orders[order['id']]
-                        await self.place_opposite_order(side, filled_price, amount)
+                        new_price = filled_price * (1 + GRID_SPACING) if side == 'buy' else filled_price * (1 - GRID_SPACING)
+                        await self.place_order('sell' if side == 'buy' else 'buy', new_price, amount)
             except Exception as e:
                 logger.error(f"WebSocket error: {e}")
                 await asyncio.sleep(5)
-
-    async def place_opposite_order(self, filled_side, price, amount):
-        new_price = price * (1 + GRID_SPACING) if filled_side == 'buy' else price * (1 - GRID_SPACING)
-        if MIN_PRICE <= new_price <= MAX_PRICE:
-            await self.place_order('sell' if filled_side == 'buy' else 'buy', new_price, amount)
 
     async def deploy_initial_grid(self):
         ticker = await self.exchange.fetch_ticker(SYMBOL)
@@ -118,27 +88,17 @@ class GridBot:
 
     async def run(self):
         try:
-            await self.exchange.load_markets()
+            # Use fetch_market instead of load_markets to avoid private endpoint auth errors
+            await self.exchange.fetch_market(SYMBOL)
             logger.info(f"Bot started: {BOT_NAME}")
             
             if get_bot_status()['status'] == 'RUNNING':
                 await self.deploy_initial_grid()
-                # Watch orders will handle auth internally if configured correctly
                 await self.watch_orders()
         finally:
             await self.cancel_all_orders()
             await self.exchange.close()
-            logger.info("WebSocket authenticated successfully.")
-        
-        logger.info(f"Bot started: {BOT_NAME}")
-        if get_bot_status()['status'] == 'RUNNING':
-            await self.deploy_initial_grid()
-            await self.watch_orders()
-        await self.cancel_all_orders()
 
 if __name__ == "__main__":
     bot = GridBot()
-    try:
-        asyncio.run(bot.run())
-    except KeyboardInterrupt:
-        asyncio.run(bot.cancel_all_orders())
+    asyncio.run(bot.run())
