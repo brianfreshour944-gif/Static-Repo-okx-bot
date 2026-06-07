@@ -53,14 +53,14 @@ class GridBot:
             'apiKey': os.getenv('OKX_API_KEY'),
             'secret': os.getenv('OKX_API_SECRET'),
             'password': os.getenv('OKX_PASSPHRASE'),
-            'hostname': 'app.okx.com',
             'enableRateLimit': True,
             'options': {
-                'defaultType': 'spot'
-                # REMOVED the 'ws' line entirely
+                'defaultType': 'spot',
+                # This ID (9999) is the standard identifier for OKX Sandbox/Demo
+                'brokerId': '9999' 
             }
         })
-        # This one command is all you need to switch everything to Demo/Sandbox
+        # This triggers the sandbox mode for the entire library
         self.exchange.set_sandbox_mode(True)
         
         self.active_orders = {}
