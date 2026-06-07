@@ -111,6 +111,13 @@ class GridBot:
 
     async def run(self):
         await self.exchange.load_markets()
+        
+        # Explicitly authenticate the WebSocket connection
+        # This uses the credentials already loaded in self.exchange
+        if self.exchange.has['ws']:
+            await self.exchange.authenticate()
+            logger.info("WebSocket authenticated successfully.")
+        
         logger.info(f"Bot started: {BOT_NAME}")
         if get_bot_status()['status'] == 'RUNNING':
             await self.deploy_initial_grid()
