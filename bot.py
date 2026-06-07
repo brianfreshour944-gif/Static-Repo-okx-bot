@@ -3,6 +3,7 @@ import os
 import time
 import ccxt
 import psycopg2
+from collections import defaultdict
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -22,11 +23,15 @@ class OKXGridBot:
         self.bot_name = os.getenv('BOT_NAME', 'Static-Repo-okx-bot')
         self.symbol = 'DOGE/USDT'
         self.grid_levels = 5
-        self.grid_step_percent = 2.0          # INCREASED to 2% (was 0.5%)
+        self.grid_step_percent = 2.0          # Wide enough to (hopefully) cover fees
         self.order_amount_usdt = 10
         
         self.active_order_ids = set()
         self.processed_order_ids = set()
+        # Track last fill price per side to avoid repeated fills at same level
+        self.last_buy_fill_price = 0.0
+        self.last_sell_fill_price = 0.0
+        self.min_price_move = 0.005            # 0.5% minimum move before placing opposite order
 
         self.test_connection()
         self.update_grid_orders()
@@ -172,6 +177,18 @@ class OKXGridBot:
 
                     self.processed_order_ids.add(order_id)
                     print(f"✅ {side} FILLED @ {price:.8f} (qty {qty}, fee {fee:.6f})")
+
+                    # --- NEW: prevent repeated fills at nearly same price ---
+                    if side == 'BUY':
+                        if abs(price - self.last_buy_fill_price) / price < self.min_price_move:
+                            print(f"⚠️ Skipping replacement – price {price:.8f} too close to last buy fill {self.last_buy_fill_price:.8f}")
+                            continue
+                        self.last_buy_fill_price = price
+                    else:
+                        if abs(price - self.last_sell_fill_price) / price < self.min_price_move:
+                            print(f"⚠️ Skipping replacement – price {price:.8f} too close to last sell fill {self.last_sell_fill_price:.8f}")
+                            continue
+                        self.last_sell_fill_price = price
 
                     # --- Place opposite order with min profit requirement ---
                     opposite_side = 'buy' if side == 'SELL' else 'sell'
