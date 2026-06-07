@@ -153,61 +153,75 @@ class OKXGridBot:
         print(f"🌐 Grid refreshed. Center price: {price:.8f}")
 
     def sync_filled_orders(self):
-        try:
-            closed_orders = self.exchange.fetch_closed_orders(self.symbol, limit=50)
-            db_url = os.getenv('DATABASE_URL')
-            for order in closed_orders:
-                order_id = order['id']
-                if order_id in self.processed_order_ids:
-                    continue
-                if order['status'] == 'closed' and order.get('price'):
-                    price = float(order['price'])
-                    qty = float(order['amount'])
-                    side = order['side'].upper()
+    try:
+        closed_orders = self.exchange.fetch_closed_orders(self.symbol, limit=50)
+        db_url = os.getenv('DATABASE_URL')
+        min_profit_pct = 0.8  # minimum profit after fees (adjust as needed)
+        for order in closed_orders:
+            order_id = order['id']
+            if order_id in self.processed_order_ids:
+                continue
+            if order['status'] == 'closed' and order.get('price'):
+                price = float(order['price'])
+                qty = float(order['amount'])
+                side = order['side'].upper()
 
-                    fee_info = order.get('fee', {})
-                    fee = float(fee_info.get('cost', 0.0)) if fee_info else 0.0
+                fee_info = order.get('fee', {})
+                fee = float(fee_info.get('cost', 0.0)) if fee_info else 0.0
 
-                    self.log_trade_to_postgres(side, price, qty, order_id, fee=fee)
+                self.log_trade_to_postgres(side, price, qty, order_id, fee=fee)
+
+                if db_url:
+                    with psycopg2.connect(db_url) as conn:
+                        with conn.cursor() as cur:
+                            cur.execute("UPDATE bot_orders SET status = 'CLOSED' WHERE order_id = %s", (order_id,))
+                            conn.commit()
+
+                self.processed_order_ids.add(order_id)
+                print(f"✅ {side} FILLED @ {price:.8f} (qty {qty}, fee {fee:.6f})")
+
+                # --- FIX: place opposite order only if profitable enough ---
+                opposite_side = 'buy' if side == 'SELL' else 'sell'
+                if side == 'BUY':
+                    # Required sell price to cover fees and make min profit
+                    target_sell = price * (1 + min_profit_pct / 100)
+                    grid_sell = price * (1 + self.grid_step_percent / 100)
+                    new_price = max(target_sell, grid_sell)
+                else:  # SELL filled
+                    target_buy = price * (1 - min_profit_pct / 100)
+                    grid_buy = price * (1 - self.grid_step_percent / 100)
+                    new_price = min(target_buy, grid_buy)
+                new_price = round(new_price, 8)
+
+                # Skip if the new price would be worse than current market (optional safety)
+                current_mid = self.get_current_price()
+                if current_mid:
+                    if opposite_side == 'sell' and new_price <= current_mid:
+                        print(f"⚠️ Skipping sell placement @ {new_price} (below market {current_mid})")
+                        continue
+                    elif opposite_side == 'buy' and new_price >= current_mid:
+                        print(f"⚠️ Skipping buy placement @ {new_price} (above market {current_mid})")
+                        continue
+
+                try:
+                    if opposite_side == 'buy':
+                        new_order = self.exchange.create_limit_buy_order(self.symbol, qty, new_price)
+                    else:
+                        new_order = self.exchange.create_limit_sell_order(self.symbol, qty, new_price)
 
                     if db_url:
                         with psycopg2.connect(db_url) as conn:
                             with conn.cursor() as cur:
-                                cur.execute("UPDATE bot_orders SET status = 'CLOSED' WHERE order_id = %s", (order_id,))
+                                cur.execute("""
+                                    INSERT INTO bot_orders (order_id, bot_name, symbol, side, price, status)
+                                    VALUES (%s, %s, %s, %s, %s, 'OPEN')
+                                """, (new_order['id'], self.bot_name, self.symbol, opposite_side, new_price))
                                 conn.commit()
-
-                    self.processed_order_ids.add(order_id)
-                    print(f"✅ {side} FILLED @ {price:.8f} (qty {qty}, fee {fee:.6f})")
-
-                    # --- FIX: Place opposite order at grid level, not same price ---
-                    opposite_side = 'buy' if side == 'SELL' else 'sell'
-                    if side == 'BUY':
-                        # Place sell one grid step above
-                        new_price = price * (1 + self.grid_step_percent / 100)
-                    else:  # SELL filled
-                        # Place buy one grid step below
-                        new_price = price * (1 - self.grid_step_percent / 100)
-                    new_price = round(new_price, 8)
-
-                    try:
-                        if opposite_side == 'buy':
-                            new_order = self.exchange.create_limit_buy_order(self.symbol, qty, new_price)
-                        else:
-                            new_order = self.exchange.create_limit_sell_order(self.symbol, qty, new_price)
-
-                        if db_url:
-                            with psycopg2.connect(db_url) as conn:
-                                with conn.cursor() as cur:
-                                    cur.execute("""
-                                        INSERT INTO bot_orders (order_id, bot_name, symbol, side, price, status)
-                                        VALUES (%s, %s, %s, %s, %s, 'OPEN')
-                                    """, (new_order['id'], self.bot_name, self.symbol, opposite_side, new_price))
-                                    conn.commit()
-                        print(f"🔄 Replaced {side} with {opposite_side.upper()} at grid level {new_price:.8f}")
-                    except Exception as e:
-                        self.log_error_to_db(f"Failed to replace order: {e}")
-        except Exception as e:
-            self.log_error_to_db(f"Sync error: {e}")
+                    print(f"🔄 Replaced {side} with {opposite_side.upper()} at {new_price:.8f} (min profit {min_profit_pct}%)")
+                except Exception as e:
+                    self.log_error_to_db(f"Failed to replace order: {e}")
+    except Exception as e:
+        self.log_error_to_db(f"Sync error: {e}")
 
     def test_connection(self):
         try:
