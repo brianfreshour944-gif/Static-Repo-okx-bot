@@ -88,8 +88,9 @@ class GridBot:
 
     async def run(self):
         try:
-            # Use fetch_market instead of load_markets to avoid private endpoint auth errors
-            await self.exchange.fetch_market(SYMBOL)
+            # fetch_ticker is public, lightweight, and doesn't trigger 
+            # the private currency validation that causes 50101
+            await self.exchange.fetch_ticker(SYMBOL) 
             logger.info(f"Bot started: {BOT_NAME}")
             
             if get_bot_status()['status'] == 'RUNNING':
