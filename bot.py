@@ -69,18 +69,18 @@ def log_error(msg):
 
 # ====================== GRID BOT ======================
 class GridBot:
-    self.exchange = ccxt.okx({
-    'apiKey': os.getenv('OKX_API_KEY'),
-    'secret': os.getenv('OKX_API_SECRET'),
-    'password': os.getenv('OKX_PASSPHRASE'),
-    'enableRateLimit': True,
-    'options': {
-        'defaultType': 'spot'
-    }
-})
-
-# This enables the sandbox environment
-self.exchange.set_sandbox_mode(True) 
+    def __init__(self):
+        self.exchange = ccxt.okx({
+            'apiKey': os.getenv('OKX_API_KEY'),
+            'secret': os.getenv('OKX_API_SECRET'),
+            'password': os.getenv('OKX_PASSPHRASE'),
+            'enableRateLimit': True,
+            'options': {
+                'defaultType': 'spot'
+            }
+        })
+        # Enable sandbox mode (set to False for live trading)
+        self.exchange.set_sandbox_mode(True)
 
         self.active_orders = {}
         self.running = True
