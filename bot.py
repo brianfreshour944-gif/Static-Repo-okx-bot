@@ -70,23 +70,33 @@ def log_error(msg):
 # ====================== GRID BOT ======================
 class GridBot:
     def __init__(self):
-        # 1. Your initialization code here
-        self.exchange = ccxt.okx({ ... })
+        # CORRECTED exchange initialization (no { ... } placeholder)
+        self.exchange = ccxt.okx({
+            'apiKey': os.getenv('OKX_API_KEY'),
+            'secret': os.getenv('OKX_API_SECRET'),
+            'password': os.getenv('OKX_PASSPHRASE'),
+            'enableRateLimit': True,
+            'options': {'defaultType': 'spot'}
+        })
+        # Enable sandbox mode (set to False for live trading)
         self.exchange.set_sandbox_mode(True)
+
         self.active_orders = {}
         self.running = True
-        # ... (rest of init)
+        self.net_pnl = 0.0
+        self.peak_equity = None
 
     # ---------- Order Management ----------
-    # This must be indented exactly 4 spaces to be part of the class
     async def place_order(self, side, price, amount):
         try:
-            # This must be indented 8 spaces (4 for class + 4 for method)
             params = {'postOnly': True} if POST_ONLY else {}
             order = await self.exchange.create_order(SYMBOL, 'limit', side, amount, price, params)
-            # ... rest of your logic
+            self.active_orders[order['id']] = {'side': side, 'price': price, 'amount': amount}
+            logger.info(f"Placed {side} {amount:.2f} @ {price:.6f}")
+            return order
         except Exception as e:
             logger.error(f"Order placement failed: {e}")
+            log_error(f"place_order failed: {e}")
             return None
 
     async def cancel_all_orders(self):
