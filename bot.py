@@ -56,12 +56,13 @@ class GridBot:
             'hostname': 'app.okx.com',
             'enableRateLimit': True,
             'options': {
-                'defaultType': 'spot',
-                # FORCE the WebSocket to the Demo/Sandbox endpoint
-                'ws': 'wss://wspap.okx.com:8443/ws/v5/public?brokerId=9999'
+                'defaultType': 'spot'
+                # REMOVED the 'ws' line entirely
             }
         })
+        # This one command is all you need to switch everything to Demo/Sandbox
         self.exchange.set_sandbox_mode(True)
+        
         self.active_orders = {}
         self.running = True
         self.net_pnl = 0.0
