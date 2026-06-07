@@ -80,7 +80,7 @@ class GridBot:
             }
         })
         # Enable sandbox mode (set to False for live trading)
-        self.exchange.set_sandbox_mode(True)
+        self.exchange.set_sandbox_mode(False)
 
         self.active_orders = {}
         self.running = True
