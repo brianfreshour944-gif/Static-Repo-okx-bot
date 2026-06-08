@@ -3,12 +3,71 @@ import ccxt.pro as ccxt
 import os
 import logging
 from sqlalchemy import create_engine, text
+from datetime import datetime
 
-# ... (your existing config and DB helpers remain unchanged) ...
+# ====================== CONFIGURATION ======================
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("GridBot")   # <-- ADD THIS LINE
 
+# Database
+DATABASE_URL = os.getenv("DATABASE_URL", "").replace("postgresql+psycopg2://", "postgresql://")
+engine = create_engine(DATABASE_URL)
+
+# Bot Settings
+BOT_NAME = "okx_grid_bot"
+SYMBOL = "DOGE/USDT"
+GRID_LEVELS = 5
+GRID_SPACING = 0.01
+BASE_ORDER_SIZE = 100
+MIN_PRICE = 0.08
+MAX_PRICE = 0.12
+POST_ONLY = True
+
+STOP_LOSS_AMOUNT = -50
+TAKE_PROFIT_AMOUNT = 100
+MAX_DRAWDOWN_PCT = 15
+CHECK_INTERVAL = 5
+
+# ====================== DATABASE HELPERS ======================
+def log_trade(bot_name, exchange, symbol, side, price, quantity, value, fee, order_id):
+    with engine.connect() as conn:
+        conn.execute(text("""
+            INSERT INTO trades (bot_name, exchange, symbol, side, price, quantity, value, fee, order_id, timestamp)
+            VALUES (:bot, :ex, :sym, :side, :price, :qty, :val, :fee, :oid, NOW())
+        """), {"bot": bot_name, "ex": exchange, "sym": symbol, "side": side, "price": price,
+               "qty": quantity, "val": value, "fee": fee, "oid": order_id})
+        conn.commit()
+
+def update_daily_loss(amount):
+    with engine.connect() as conn:
+        conn.execute(text("UPDATE bot_status SET daily_loss = daily_loss + :amt WHERE bot_name = :name"),
+                     {"amt": amount, "name": BOT_NAME})
+        conn.commit()
+
+def get_bot_status():
+    with engine.connect() as conn:
+        result = conn.execute(text("SELECT status, daily_loss, daily_loss_limit FROM bot_status WHERE bot_name = :name"),
+                              {"name": BOT_NAME})
+        row = result.fetchone()
+        if row:
+            return {"status": row[0], "daily_loss": row[1] or 0, "daily_loss_limit": row[2] or 100}
+        else:
+            conn.execute(text("""
+                INSERT INTO bot_status (bot_name, status, daily_loss, daily_loss_limit, config)
+                VALUES (:name, 'STOP', 0, 100, '{}')
+            """), {"name": BOT_NAME})
+            conn.commit()
+            return {"status": "STOP", "daily_loss": 0, "daily_loss_limit": 100}
+
+def log_error(msg):
+    with engine.connect() as conn:
+        conn.execute(text("INSERT INTO bot_errors (bot_name, error_message, timestamp) VALUES (:name, :msg, NOW())"),
+                     {"name": BOT_NAME, "msg": msg})
+        conn.commit()
+
+# ====================== GRID BOT ======================
 class GridBot:
     def __init__(self):
-        # EXACTLY like the sync bot
         self.exchange = ccxt.okx({
             'apiKey': os.getenv('OKX_API_KEY'),
             'secret': os.getenv('OKX_API_SECRET'),
@@ -16,7 +75,6 @@ class GridBot:
             'enableRateLimit': True,
             'options': {'defaultType': 'spot'}
         })
-        # These two lines are critical – same as sync bot
         self.exchange.set_sandbox_mode(True)
         self.exchange.headers = {'x-simulated-trading': '1'}
 
@@ -24,8 +82,6 @@ class GridBot:
         self.running = True
         self.net_pnl = 0.0
         self.peak_equity = None
-
-    # ... (all other methods exactly as before) ...
 
     async def place_order(self, side, price, amount):
         try:
@@ -87,17 +143,21 @@ class GridBot:
             await asyncio.sleep(CHECK_INTERVAL)
             status = get_bot_status()
             if status['status'] != 'RUNNING':
+                logger.info("Bot stopped by dashboard")
                 self.running = False
                 break
             daily_loss = status['daily_loss']
             daily_limit = status['daily_loss_limit']
             if daily_loss <= -daily_limit or self.net_pnl <= STOP_LOSS_AMOUNT:
+                logger.warning(f"Stop condition triggered")
                 self.running = False
                 break
             if self.net_pnl >= TAKE_PROFIT_AMOUNT:
+                logger.info(f"Take-profit reached")
                 self.running = False
                 break
-            # Drawdown check (optional, can be skipped for now)
+
+            # Drawdown check (simplified)
             try:
                 balance = await self.exchange.fetch_balance()
                 usdt = balance['USDT']['free'] if 'USDT' in balance else 0
@@ -105,14 +165,16 @@ class GridBot:
                 base = SYMBOL.split('/')[0]
                 base_bal = balance[base]['free'] if base in balance else 0
                 equity = usdt + (base_bal * ticker['last'])
-                if self.peak_equity is None: self.peak_equity = equity
+                if self.peak_equity is None:
+                    self.peak_equity = equity
                 else:
                     self.peak_equity = max(self.peak_equity, equity)
                     dd = (self.peak_equity - equity) / self.peak_equity * 100
                     if dd >= MAX_DRAWDOWN_PCT:
+                        logger.warning(f"Drawdown {dd:.1f}%")
                         self.running = False
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning(f"Drawdown check error: {e}")
 
     async def deploy_initial_grid(self):
         ticker = await self.exchange.fetch_ticker(SYMBOL)
@@ -131,19 +193,24 @@ class GridBot:
         try:
             await self.exchange.load_markets()
             logger.info(f"Bot started: {BOT_NAME} on {SYMBOL}")
+
             # Test authentication
             bal = await self.exchange.fetch_balance()
             logger.info(f"✅ Auth OK! USDT balance: {bal['USDT']['free']}")
+
             status = get_bot_status()
             if status['status'] != 'RUNNING':
                 logger.info("Bot is STOPPED in database. Exiting.")
                 return
+
             await self.deploy_initial_grid()
             await asyncio.gather(self.watch_orders(), self.safety_monitor())
+
         except Exception as e:
             logger.error(f"Critical bot error: {e}")
             log_error(f"Critical error: {e}")
         finally:
+            logger.info("Cleaning up...")
             await self.cancel_all_orders()
             await self.exchange.close()
 
@@ -152,4 +219,5 @@ if __name__ == "__main__":
     try:
         asyncio.run(bot.run())
     except KeyboardInterrupt:
+        logger.info("Shutting down...")
         asyncio.run(bot.cancel_all_orders())
