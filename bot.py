@@ -71,20 +71,20 @@ def log_error(msg):
 # ====================== GRID BOT ======================
 class GridBot:
     def __init__(self):
-    self.exchange = ccxt.okx({
-        'apiKey': os.getenv('OKX_API_KEY'),
-        'secret': os.getenv('OKX_API_SECRET'),
-        'password': os.getenv('OKX_PASSPHRASE'),
-        'enableRateLimit': True,
-        'options': {'defaultType': 'spot'}
-    })
-    
-    # THESE ARE THE CRITICAL LINES FROM YOUR WORKING BOT:
-    self.exchange.set_sandbox_mode(True)
-    self.exchange.headers = {'x-simulated-trading': '1'}
-    
-    self.active_orders = {}
-    self.running = True
+        self.exchange = ccxt.okx({
+            'apiKey': os.getenv('OKX_API_KEY'),
+            'secret': os.getenv('OKX_API_SECRET'),
+            'password': os.getenv('OKX_PASSPHRASE'),
+            'enableRateLimit': True,
+            'options': {'defaultType': 'spot'}
+        })
+        
+        # Add these lines to fix your authentication/silo issue:
+        self.exchange.set_sandbox_mode(True)
+        self.exchange.headers = {'x-simulated-trading': '1'}
+        
+        self.active_orders = {}
+        self.running = True
     self.net_pnl = 0.0
     self.peak_equity = None
 
