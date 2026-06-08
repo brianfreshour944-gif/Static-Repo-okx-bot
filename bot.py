@@ -68,22 +68,43 @@ def log_error(msg):
 # ====================== GRID BOT ======================
 class GridBot:
     def __init__(self):
-        # --- DIAGNOSTIC: Print first 8 chars of each credential ---
-        api_key = os.getenv('OKX_API_KEY')
-        api_secret = os.getenv('OKX_API_SECRET')
-        api_pass = os.getenv('OKX_PASSPHRASE')
-        print(f"DEBUG: OKX_API_KEY = {api_key[:8] if api_key else 'NOT SET'}...")
-        print(f"DEBUG: OKX_API_SECRET = {api_secret[:8] if api_secret else 'NOT SET'}...")
-        print(f"DEBUG: OKX_PASSPHRASE = {api_pass[:8] if api_pass else 'NOT SET'}...")
+    # Debug prints
+    api_key = os.getenv('OKX_API_KEY')
+    api_secret = os.getenv('OKX_API_SECRET')
+    api_pass = os.getenv('OKX_PASSPHRASE')
+    print(f"DEBUG: OKX_API_KEY = {api_key[:8] if api_key else 'NOT SET'}...")
+    print(f"DEBUG: OKX_API_SECRET = {api_secret[:8] if api_secret else 'NOT SET'}...")
+    print(f"DEBUG: OKX_PASSPHRASE = {api_pass[:8] if api_pass else 'NOT SET'}...")
 
-        # Create synchronous exchange (same as your working bot)
-        self.exchange = ccxt.okx({
-            'apiKey': api_key,
-            'secret': api_secret,
-            'password': api_pass,
-            'enableRateLimit': True,
-            'options': {'defaultType': 'spot'}
-        })
+    # Explicit sandbox hostname – no set_sandbox_mode
+    self.exchange = ccxt.okx({
+        'apiKey': api_key,
+        'secret': api_secret,
+        'password': api_pass,
+        'hostname': 'sandbox.okx.com',   # <-- key fix
+        'enableRateLimit': True,
+        'options': {
+            'defaultType': 'spot',
+            'headers': {'x-simulated-trading': '1'}   # keep simulation header
+        }
+    })
+    # Do NOT call set_sandbox_mode
+
+    # Test authentication synchronously
+    try:
+        self.exchange.load_markets()
+        balance = self.exchange.fetch_balance()
+        usdt_balance = balance['USDT']['free'] if 'USDT' in balance else 0
+        print(f"✅ SYNC TEST PASSED! USDT balance: {usdt_balance}")
+    except Exception as e:
+        print(f"❌ SYNC TEST FAILED: {e}")
+        log_error(f"Sync auth test failed: {e}")
+        raise RuntimeError(f"Authentication failed: {e}")
+
+    self.active_orders = {}
+    self.running = True
+    self.net_pnl = 0.0
+    self.peak_equity = None
         self.exchange.set_sandbox_mode(True)
         self.exchange.headers = {'x-simulated-trading': '1'}
 
