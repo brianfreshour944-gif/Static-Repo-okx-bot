@@ -70,6 +70,9 @@ class GridBot:
     def __init__(self):
         # Create synchronous exchange – same as your working bot
         self.exchange = ccxt.okx({
+            print("DEBUG: OKX_API_KEY =", os.getenv('OKX_API_KEY', 'NOT SET')[:8] + "...")
+print("DEBUG: OKX_API_SECRET =", os.getenv('OKX_API_SECRET', 'NOT SET')[:8] + "...")
+print("DEBUG: OKX_PASSPHRASE =", os.getenv('OKX_PASSPHRASE', 'NOT SET')[:8] + "...")
             'apiKey': os.getenv('OKX_API_KEY'),
             'secret': os.getenv('OKX_API_SECRET'),
             'password': os.getenv('OKX_PASSPHRASE'),
