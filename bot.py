@@ -1,5 +1,5 @@
 import asyncio
-import ccxt.pro as ccxt
+import ccxt
 import os
 import logging
 from sqlalchemy import create_engine, text
@@ -7,7 +7,7 @@ from datetime import datetime
 
 # ====================== CONFIGURATION ======================
 logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("GridBot")   # <-- ADD THIS LINE
+logger = logging.getLogger("GridBot")
 
 # Database
 DATABASE_URL = os.getenv("DATABASE_URL", "").replace("postgresql+psycopg2://", "postgresql://")
@@ -28,7 +28,7 @@ TAKE_PROFIT_AMOUNT = 100
 MAX_DRAWDOWN_PCT = 15
 CHECK_INTERVAL = 5
 
-# ====================== DATABASE HELPERS ======================
+# ====================== DATABASE HELPERS (unchanged) ======================
 def log_trade(bot_name, exchange, symbol, side, price, quantity, value, fee, order_id):
     with engine.connect() as conn:
         conn.execute(text("""
@@ -65,9 +65,10 @@ def log_error(msg):
                      {"name": BOT_NAME, "msg": msg})
         conn.commit()
 
-# ====================== GRID BOT ======================
+# ====================== SYNCHRONOUS GRID BOT (wrapped in async) ======================
 class GridBot:
     def __init__(self):
+        # Create synchronous exchange – same as your working bot
         self.exchange = ccxt.okx({
             'apiKey': os.getenv('OKX_API_KEY'),
             'secret': os.getenv('OKX_API_SECRET'),
@@ -78,15 +79,22 @@ class GridBot:
         self.exchange.set_sandbox_mode(True)
         self.exchange.headers = {'x-simulated-trading': '1'}
 
-        self.active_orders = {}
+        self.active_orders = {}  # order_id -> {side, price, amount}
         self.running = True
         self.net_pnl = 0.0
         self.peak_equity = None
 
+    # ---------- Blocking methods (run in threads) ----------
+    async def _run_sync(self, func, *args, **kwargs):
+        """Run a synchronous exchange method in a thread."""
+        return await asyncio.to_thread(func, *args, **kwargs)
+
     async def place_order(self, side, price, amount):
         try:
             params = {'postOnly': True} if POST_ONLY else {}
-            order = await self.exchange.create_order(SYMBOL, 'limit', side, amount, price, params)
+            order = await self._run_sync(
+                self.exchange.create_order, SYMBOL, 'limit', side, amount, price, params
+            )
             self.active_orders[order['id']] = {'side': side, 'price': price, 'amount': amount}
             logger.info(f"Placed {side} {amount:.2f} @ {price:.6f}")
             return order
@@ -98,18 +106,31 @@ class GridBot:
     async def cancel_all_orders(self):
         for oid in list(self.active_orders.keys()):
             try:
-                await self.exchange.cancel_order(oid, SYMBOL)
+                await self._run_sync(self.exchange.cancel_order, oid, SYMBOL)
                 logger.info(f"Cancelled order {oid}")
             except Exception as e:
                 logger.warning(f"Could not cancel {oid}: {e}")
         self.active_orders.clear()
 
-    async def watch_orders(self):
+    async def fetch_balance(self):
+        return await self._run_sync(self.exchange.fetch_balance)
+
+    async def fetch_ticker(self):
+        return await self._run_sync(self.exchange.fetch_ticker, SYMBOL)
+
+    # ---------- Order monitoring (polling, because no WebSocket) ----------
+    async def monitor_orders(self):
+        """Poll for order status changes (simple fallback)."""
+        last_status = {}
         while self.running:
+            await asyncio.sleep(2)  # check every 2 seconds
             try:
-                orders = await self.exchange.watch_orders(SYMBOL)
-                for order in orders:
-                    if order['id'] in self.active_orders and order['status'] == 'closed':
+                # Fetch open orders – we can also fetch specific order status
+                # For simplicity, we'll just check each active order's status
+                for oid in list(self.active_orders.keys()):
+                    order = await self._run_sync(self.exchange.fetch_order, oid, SYMBOL)
+                    if order['status'] == 'closed' and oid in self.active_orders:
+                        # Process fill
                         filled_price = float(order['average'])
                         amount = float(order['filled'])
                         side = order['side']
@@ -120,14 +141,13 @@ class GridBot:
                         self.net_pnl += trade_pnl
                         update_daily_loss(trade_pnl)
 
-                        log_trade(BOT_NAME, 'OKX', SYMBOL, side, filled_price, amount, value, fee, order['id'])
+                        log_trade(BOT_NAME, 'OKX', SYMBOL, side, filled_price, amount, value, fee, oid)
                         logger.info(f"Filled {side} | P&L: {trade_pnl:.2f} | Total: {self.net_pnl:.2f}")
 
-                        del self.active_orders[order['id']]
+                        del self.active_orders[oid]
                         await self.place_opposite_order(side, filled_price, amount)
             except Exception as e:
-                logger.error(f"WebSocket error: {e}")
-                log_error(f"watch_orders error: {e}")
+                logger.error(f"Order monitoring error: {e}")
                 await asyncio.sleep(5)
 
     async def place_opposite_order(self, filled_side, price, amount):
@@ -138,6 +158,7 @@ class GridBot:
         else:
             logger.warning(f"Boundary reached: {new_price:.6f}")
 
+    # ---------- Safety Monitor ----------
     async def safety_monitor(self):
         while self.running:
             await asyncio.sleep(CHECK_INTERVAL)
@@ -148,8 +169,12 @@ class GridBot:
                 break
             daily_loss = status['daily_loss']
             daily_limit = status['daily_loss_limit']
-            if daily_loss <= -daily_limit or self.net_pnl <= STOP_LOSS_AMOUNT:
-                logger.warning(f"Stop condition triggered")
+            if daily_loss <= -daily_limit:
+                logger.warning(f"Daily loss limit reached")
+                self.running = False
+                break
+            if self.net_pnl <= STOP_LOSS_AMOUNT:
+                logger.warning(f"Stop-loss triggered")
                 self.running = False
                 break
             if self.net_pnl >= TAKE_PROFIT_AMOUNT:
@@ -157,14 +182,15 @@ class GridBot:
                 self.running = False
                 break
 
-            # Drawdown check (simplified)
+            # Drawdown check
             try:
-                balance = await self.exchange.fetch_balance()
+                balance = await self.fetch_balance()
                 usdt = balance['USDT']['free'] if 'USDT' in balance else 0
-                ticker = await self.exchange.fetch_ticker(SYMBOL)
+                ticker = await self.fetch_ticker()
+                current_price = ticker['last']
                 base = SYMBOL.split('/')[0]
                 base_bal = balance[base]['free'] if base in balance else 0
-                equity = usdt + (base_bal * ticker['last'])
+                equity = usdt + (base_bal * current_price)
                 if self.peak_equity is None:
                     self.peak_equity = equity
                 else:
@@ -174,29 +200,32 @@ class GridBot:
                         logger.warning(f"Drawdown {dd:.1f}%")
                         self.running = False
             except Exception as e:
-                logger.warning(f"Drawdown check error: {e}")
+                logger.warning(f"Drawdown error: {e}")
 
+    # ---------- Initial Grid ----------
     async def deploy_initial_grid(self):
-        ticker = await self.exchange.fetch_ticker(SYMBOL)
+        ticker = await self.fetch_ticker()
         mid = ticker['last']
         logger.info(f"Initial price: {mid:.6f}")
         for i in range(1, GRID_LEVELS + 1):
-            buy = mid * (1 - i * GRID_SPACING)
-            sell = mid * (1 + i * GRID_SPACING)
-            amt = BASE_ORDER_SIZE / mid
-            if MIN_PRICE <= buy <= MAX_PRICE:
-                await self.place_order('buy', buy, amt)
-            if MIN_PRICE <= sell <= MAX_PRICE:
-                await self.place_order('sell', sell, amt)
+            buy_price = mid * (1 - i * GRID_SPACING)
+            sell_price = mid * (1 + i * GRID_SPACING)
+            amount = BASE_ORDER_SIZE / mid
+            if MIN_PRICE <= buy_price <= MAX_PRICE:
+                await self.place_order('buy', buy_price, amount)
+            if MIN_PRICE <= sell_price <= MAX_PRICE:
+                await self.place_order('sell', sell_price, amount)
 
+    # ---------- Main Run ----------
     async def run(self):
         try:
-            await self.exchange.load_markets()
+            # Load markets (blocking, run in thread)
+            await self._run_sync(self.exchange.load_markets)
             logger.info(f"Bot started: {BOT_NAME} on {SYMBOL}")
 
             # Test authentication
-            bal = await self.exchange.fetch_balance()
-            logger.info(f"✅ Auth OK! USDT balance: {bal['USDT']['free']}")
+            balance = await self.fetch_balance()
+            logger.info(f"✅ Auth OK! USDT balance: {balance['USDT']['free']}")
 
             status = get_bot_status()
             if status['status'] != 'RUNNING':
@@ -204,7 +233,7 @@ class GridBot:
                 return
 
             await self.deploy_initial_grid()
-            await asyncio.gather(self.watch_orders(), self.safety_monitor())
+            await asyncio.gather(self.monitor_orders(), self.safety_monitor())
 
         except Exception as e:
             logger.error(f"Critical bot error: {e}")
@@ -212,7 +241,6 @@ class GridBot:
         finally:
             logger.info("Cleaning up...")
             await self.cancel_all_orders()
-            await self.exchange.close()
 
 if __name__ == "__main__":
     bot = GridBot()
