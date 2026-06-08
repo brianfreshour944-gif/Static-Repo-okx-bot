@@ -69,8 +69,7 @@ def log_error(msg):
 
 # ====================== GRID BOT ======================
 class GridBot:
-    def __init__(self):
-        # Use the same configuration as the working MeanReversionBot
+ def __init__(self):
         self.exchange = ccxt.okx({
             'apiKey': os.getenv('OKX_API_KEY'),
             'secret': os.getenv('OKX_API_SECRET'),
@@ -79,14 +78,25 @@ class GridBot:
             'options': {'defaultType': 'spot'}
         })
         
-        # EXACTLY like the working bot:
+        # This setup is identical to your working bot
         self.exchange.set_sandbox_mode(True)
         self.exchange.headers = {'x-simulated-trading': '1'}
-
+        
         self.active_orders = {}
         self.running = True
-        self.net_pnl = 0.0
-        self.peak_equity = None
+
+    async def run(self):
+        try:
+            await self.exchange.load_markets()
+            logger.info(f"Bot started: {BOT_NAME} on {SYMBOL}")
+            await self.deploy_initial_grid()
+            await asyncio.gather(self.watch_orders(), self.safety_monitor())
+        except Exception as e:
+            logger.error(f"Critical Bot Error: {e}")
+        finally:
+            logger.info("Cleaning up...")
+            await self.cancel_all_orders()
+            await self.exchange.close()
 
     # ---------- Order Management ----------
     async def place_order(self, side, price, amount):
