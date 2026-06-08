@@ -1,4 +1,3 @@
-
 import asyncio
 import ccxt.pro as ccxt
 import os
@@ -25,10 +24,10 @@ MAX_PRICE = 0.12
 POST_ONLY = True
 
 # Stop & Profit Settings
-STOP_LOSS_AMOUNT = -50    # USD
-TAKE_PROFIT_AMOUNT = 100  # USD
-MAX_DRAWDOWN_PCT = 15     # %
-CHECK_INTERVAL = 5        # seconds
+STOP_LOSS_AMOUNT = -50
+TAKE_PROFIT_AMOUNT = 100
+MAX_DRAWDOWN_PCT = 15
+CHECK_INTERVAL = 5
 
 # ====================== DATABASE HELPERS ======================
 def log_trade(bot_name, exchange, symbol, side, price, quantity, value, fee, order_id):
@@ -70,18 +69,19 @@ def log_error(msg):
 # ====================== GRID BOT ======================
 class GridBot:
     def __init__(self):
-        # ⚠️ CRITICAL FIX: Match your working bot's exchange setup
-        # No hostname override, only set_sandbox_mode(True) + headers
+        # CRITICAL: Use explicit sandbox hostname (same as sync bot's set_sandbox_mode)
         self.exchange = ccxt.okx({
             'apiKey': os.getenv('OKX_API_KEY'),
             'secret': os.getenv('OKX_API_SECRET'),
             'password': os.getenv('OKX_PASSPHRASE'),
+            'hostname': 'sandbox.okx.com',   # Direct sandbox endpoint
             'enableRateLimit': True,
-            'options': {'defaultType': 'spot'}
+            'options': {
+                'defaultType': 'spot',
+                'headers': {'x-simulated-trading': '1'}  # Keep simulation header
+            }
         })
-        # Exactly as your working bot does:
-        self.exchange.set_sandbox_mode(True)
-        self.exchange.headers = {'x-simulated-trading': '1'}
+        # Do NOT call set_sandbox_mode (already on sandbox hostname)
 
         self.active_orders = {}
         self.running = True
@@ -214,7 +214,7 @@ class GridBot:
             await self.exchange.load_markets()
             logger.info(f"Bot started: {BOT_NAME} on {SYMBOL}")
 
-            # Quick authentication test (optional)
+            # Test authentication
             try:
                 balance = await self.exchange.fetch_balance()
                 logger.info(f"✅ Auth OK! USDT balance: {balance['USDT']['free']}")
