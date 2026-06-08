@@ -68,20 +68,37 @@ def log_error(msg):
 # ====================== GRID BOT ======================
 class GridBot:
     def __init__(self):
-        # Debug prints – must be OUTSIDE the dictionary
-        print("DEBUG: OKX_API_KEY =", os.getenv('OKX_API_KEY', 'NOT SET')[:8] + "...")
-        print("DEBUG: OKX_API_SECRET =", os.getenv('OKX_API_SECRET', 'NOT SET')[:8] + "...")
-        print("DEBUG: OKX_PASSPHRASE =", os.getenv('OKX_PASSPHRASE', 'NOT SET')[:8] + "...")
+        # --- DIAGNOSTIC: Print first 8 chars of each credential ---
+        api_key = os.getenv('OKX_API_KEY')
+        api_secret = os.getenv('OKX_API_SECRET')
+        api_pass = os.getenv('OKX_PASSPHRASE')
+        print(f"DEBUG: OKX_API_KEY = {api_key[:8] if api_key else 'NOT SET'}...")
+        print(f"DEBUG: OKX_API_SECRET = {api_secret[:8] if api_secret else 'NOT SET'}...")
+        print(f"DEBUG: OKX_PASSPHRASE = {api_pass[:8] if api_pass else 'NOT SET'}...")
 
+        # Create synchronous exchange (same as your working bot)
         self.exchange = ccxt.okx({
-            'apiKey': os.getenv('OKX_API_KEY'),
-            'secret': os.getenv('OKX_API_SECRET'),
-            'password': os.getenv('OKX_PASSPHRASE'),
+            'apiKey': api_key,
+            'secret': api_secret,
+            'password': api_pass,
             'enableRateLimit': True,
             'options': {'defaultType': 'spot'}
         })
         self.exchange.set_sandbox_mode(True)
         self.exchange.headers = {'x-simulated-trading': '1'}
+
+        # --- TEST: Synchronous balance fetch to verify credentials ---
+        try:
+            # Load markets (optional but good)
+            self.exchange.load_markets()
+            balance = self.exchange.fetch_balance()
+            usdt_balance = balance['USDT']['free'] if 'USDT' in balance else 0
+            print(f"✅ SYNC TEST PASSED! USDT balance: {usdt_balance}")
+        except Exception as e:
+            print(f"❌ SYNC TEST FAILED: {e}")
+            # Log the error and exit – no point continuing
+            log_error(f"Sync auth test failed: {e}")
+            raise RuntimeError(f"Authentication failed: {e}")
 
         self.active_orders = {}
         self.running = True
@@ -121,7 +138,6 @@ class GridBot:
     async def fetch_ticker(self):
         return await self._run_sync(self.exchange.fetch_ticker, SYMBOL)
 
-    # ---------- Order monitoring (polling) ----------
     async def monitor_orders(self):
         while self.running:
             await asyncio.sleep(2)
@@ -156,7 +172,6 @@ class GridBot:
         else:
             logger.warning(f"Boundary reached: {new_price:.6f}")
 
-    # ---------- Safety Monitor ----------
     async def safety_monitor(self):
         while self.running:
             await asyncio.sleep(CHECK_INTERVAL)
@@ -199,7 +214,6 @@ class GridBot:
             except Exception as e:
                 logger.warning(f"Drawdown error: {e}")
 
-    # ---------- Initial Grid ----------
     async def deploy_initial_grid(self):
         ticker = await self.fetch_ticker()
         mid = ticker['last']
@@ -213,15 +227,10 @@ class GridBot:
             if MIN_PRICE <= sell_price <= MAX_PRICE:
                 await self.place_order('sell', sell_price, amount)
 
-    # ---------- Main Run ----------
     async def run(self):
         try:
-            await self._run_sync(self.exchange.load_markets)
+            # No need to load markets again – already done in __init__
             logger.info(f"Bot started: {BOT_NAME} on {SYMBOL}")
-
-            # Test authentication
-            balance = await self.fetch_balance()
-            logger.info(f"✅ Auth OK! USDT balance: {balance['USDT']['free']}")
 
             status = get_bot_status()
             if status['status'] != 'RUNNING':
