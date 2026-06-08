@@ -70,20 +70,18 @@ def log_error(msg):
 # ====================== GRID BOT ======================
 class GridBot:
     def __init__(self):
-        # Use the standard www.okx.com gateway with simulation header
+        # Use the same configuration as the working MeanReversionBot
         self.exchange = ccxt.okx({
             'apiKey': os.getenv('OKX_API_KEY'),
             'secret': os.getenv('OKX_API_SECRET'),
             'password': os.getenv('OKX_PASSPHRASE'),
             'enableRateLimit': True,
-            'options': {
-                'defaultType': 'spot',
-                # Official OKX demo/simulation header
-                'headers': {'x-simulated-trading': '1'}
-            }
+            'options': {'defaultType': 'spot'}
         })
-        # No sandbox mode – the header handles simulation
-        # self.exchange.set_sandbox_mode(False) is implied
+        
+        # EXACTLY like the working bot:
+        self.exchange.set_sandbox_mode(True)
+        self.exchange.headers = {'x-simulated-trading': '1'}
 
         self.active_orders = {}
         self.running = True
