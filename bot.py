@@ -81,11 +81,11 @@ class GridBot:
         'apiKey': api_key,
         'secret': api_secret,
         'password': api_pass,
-        'hostname': 'sandbox.okx.com',   # <-- key fix
+        'hostname': 'sandbox.okx.com',   # key fix
         'enableRateLimit': True,
         'options': {
             'defaultType': 'spot',
-            'headers': {'x-simulated-trading': '1'}   # keep simulation header
+            'headers': {'x-simulated-trading': '1'}
         }
     })
     # Do NOT call set_sandbox_mode
