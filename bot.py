@@ -28,7 +28,7 @@ TAKE_PROFIT_AMOUNT = 100
 MAX_DRAWDOWN_PCT = 15
 CHECK_INTERVAL = 5
 
-# ====================== DATABASE HELPERS (unchanged) ======================
+# ====================== DATABASE HELPERS ======================
 def log_trade(bot_name, exchange, symbol, side, price, quantity, value, fee, order_id):
     with engine.connect() as conn:
         conn.execute(text("""
@@ -65,14 +65,15 @@ def log_error(msg):
                      {"name": BOT_NAME, "msg": msg})
         conn.commit()
 
-# ====================== SYNCHRONOUS GRID BOT (wrapped in async) ======================
+# ====================== GRID BOT ======================
 class GridBot:
     def __init__(self):
-        # Create synchronous exchange – same as your working bot
+        # Debug prints – must be OUTSIDE the dictionary
+        print("DEBUG: OKX_API_KEY =", os.getenv('OKX_API_KEY', 'NOT SET')[:8] + "...")
+        print("DEBUG: OKX_API_SECRET =", os.getenv('OKX_API_SECRET', 'NOT SET')[:8] + "...")
+        print("DEBUG: OKX_PASSPHRASE =", os.getenv('OKX_PASSPHRASE', 'NOT SET')[:8] + "...")
+
         self.exchange = ccxt.okx({
-            print("DEBUG: OKX_API_KEY =", os.getenv('OKX_API_KEY', 'NOT SET')[:8] + "...")
-print("DEBUG: OKX_API_SECRET =", os.getenv('OKX_API_SECRET', 'NOT SET')[:8] + "...")
-print("DEBUG: OKX_PASSPHRASE =", os.getenv('OKX_PASSPHRASE', 'NOT SET')[:8] + "...")
             'apiKey': os.getenv('OKX_API_KEY'),
             'secret': os.getenv('OKX_API_SECRET'),
             'password': os.getenv('OKX_PASSPHRASE'),
@@ -82,14 +83,13 @@ print("DEBUG: OKX_PASSPHRASE =", os.getenv('OKX_PASSPHRASE', 'NOT SET')[:8] + ".
         self.exchange.set_sandbox_mode(True)
         self.exchange.headers = {'x-simulated-trading': '1'}
 
-        self.active_orders = {}  # order_id -> {side, price, amount}
+        self.active_orders = {}
         self.running = True
         self.net_pnl = 0.0
         self.peak_equity = None
 
     # ---------- Blocking methods (run in threads) ----------
     async def _run_sync(self, func, *args, **kwargs):
-        """Run a synchronous exchange method in a thread."""
         return await asyncio.to_thread(func, *args, **kwargs)
 
     async def place_order(self, side, price, amount):
@@ -121,19 +121,14 @@ print("DEBUG: OKX_PASSPHRASE =", os.getenv('OKX_PASSPHRASE', 'NOT SET')[:8] + ".
     async def fetch_ticker(self):
         return await self._run_sync(self.exchange.fetch_ticker, SYMBOL)
 
-    # ---------- Order monitoring (polling, because no WebSocket) ----------
+    # ---------- Order monitoring (polling) ----------
     async def monitor_orders(self):
-        """Poll for order status changes (simple fallback)."""
-        last_status = {}
         while self.running:
-            await asyncio.sleep(2)  # check every 2 seconds
+            await asyncio.sleep(2)
             try:
-                # Fetch open orders – we can also fetch specific order status
-                # For simplicity, we'll just check each active order's status
                 for oid in list(self.active_orders.keys()):
                     order = await self._run_sync(self.exchange.fetch_order, oid, SYMBOL)
                     if order['status'] == 'closed' and oid in self.active_orders:
-                        # Process fill
                         filled_price = float(order['average'])
                         amount = float(order['filled'])
                         side = order['side']
@@ -173,19 +168,18 @@ print("DEBUG: OKX_PASSPHRASE =", os.getenv('OKX_PASSPHRASE', 'NOT SET')[:8] + ".
             daily_loss = status['daily_loss']
             daily_limit = status['daily_loss_limit']
             if daily_loss <= -daily_limit:
-                logger.warning(f"Daily loss limit reached")
+                logger.warning("Daily loss limit reached")
                 self.running = False
                 break
             if self.net_pnl <= STOP_LOSS_AMOUNT:
-                logger.warning(f"Stop-loss triggered")
+                logger.warning("Stop-loss triggered")
                 self.running = False
                 break
             if self.net_pnl >= TAKE_PROFIT_AMOUNT:
-                logger.info(f"Take-profit reached")
+                logger.info("Take-profit reached")
                 self.running = False
                 break
 
-            # Drawdown check
             try:
                 balance = await self.fetch_balance()
                 usdt = balance['USDT']['free'] if 'USDT' in balance else 0
@@ -222,7 +216,6 @@ print("DEBUG: OKX_PASSPHRASE =", os.getenv('OKX_PASSPHRASE', 'NOT SET')[:8] + ".
     # ---------- Main Run ----------
     async def run(self):
         try:
-            # Load markets (blocking, run in thread)
             await self._run_sync(self.exchange.load_markets)
             logger.info(f"Bot started: {BOT_NAME} on {SYMBOL}")
 
