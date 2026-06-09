@@ -100,13 +100,44 @@ class OKXGridBot:
             self.log_error_to_db(f"Failed to place {side} order: {e}")
             return None
 
+    # ---------- GRID LOGIC UPDATES ----------
+
     def update_grid_orders(self):
         price = self.get_current_price()
         if not price: return
         grid = self.calculate_grid_prices(price)
+        
+        # FIXED COST PER TRADE
+        cost_per_trade = 33.33 
+        
         for side, p in grid:
-            self.place_single_order(side, p, round(self.order_amount_usdt / p, 2))
-        print(f"🌐 Initial grid populated around {price:.8f}")
+            # Calculate quantity based on $33.33 fixed cost
+            qty = round(cost_per_trade / p, 2)
+            self.place_single_order(side, p, qty)
+        print(f"🌐 Initial grid populated around {price:.8f} with $33.33 per order")
+
+    def sync_filled_orders(self):
+        try:
+            orders = self.exchange.fetch_closed_orders(self.symbol, limit=20)
+            for order in orders:
+                if order['id'] not in self.processed_order_ids:
+                    self.processed_order_ids.append(order['id'])
+                    
+                    price, qty, side = float(order['price']), float(order['amount']), order['side']
+                    fee = float(order.get('fee', {}).get('cost', 0.0))
+                    
+                    self.log_trade_to_postgres(side.upper(), price, qty, order['id'], fee)
+                    
+                    # Replenishment Logic with fixed $33.33
+                    cost_per_trade = 33.33
+                    if side == 'buy':
+                        sell_price = round(price * (1 + (self.grid_step_percent / 100)), 8)
+                        self.place_single_order('sell', sell_price, round(cost_per_trade / sell_price, 2))
+                    else:
+                        buy_price = round(price * (1 - (self.grid_step_percent / 100)), 8)
+                        self.place_single_order('buy', buy_price, round(cost_per_trade / buy_price, 2))
+        except Exception as e:
+            self.log_error_to_db(f"Sync error: {e}")
 
     def sync_filled_orders(self):
         try:
