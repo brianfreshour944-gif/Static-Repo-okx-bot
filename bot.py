@@ -397,14 +397,18 @@ class ReactiveGridBot:
             await self.sync_daily_loss_from_trades()
             
             # Check safety after sync
+            # Check safety after sync
             status = get_bot_status()
             if status['status'] != 'RUNNING':
                 logger.warning("Bot is STOPPED in database.")
                 return
             
             if status.get('daily_loss', 0) <= -MAX_DAILY_LOSS_USDT:
-                logger.error(f"Daily loss {status['daily_loss']:.2f} exceeds limit {MAX_DAILY_LOSS_USDT}. Not starting.")
-                sys.exit(1)  # Exit with error to prevent auto-restart
+                logger.error(f"Daily loss {status['daily_loss']:.2f} exceeds limit {MAX_DAILY_LOSS_USDT}. Entering IDLE mode.")
+                # Instead of crashing the container, we pause indefinitely.
+                # This keeps the container "Healthy" (exit code 0) so it doesn't restart.
+                while True:
+                    await asyncio.sleep(86400) # Sleeps for 24 hours, effectively pausing the bot
             
             # Fetch existing open orders and balances
             await self.fetch_account_state()
