@@ -2,56 +2,56 @@ import ccxt
 import os
 import sys
 
-print("=== OKX API Diagnostic Test (with regional fixes) ===")
+print("=== OKX API Test - Matching Your Working Bot ===")
 
 api_key = os.getenv('OKX_API_KEY')
 api_secret = os.getenv('OKX_API_SECRET')
 passphrase = os.getenv('OKX_PASSPHRASE')
 
-print(f"API Key:     {'✅ Loaded' if api_key else '❌ MISSING'}")
-print(f"Secret:      {'✅ Loaded' if api_secret else '❌ MISSING'}")
-print(f"Passphrase:  {'✅ Loaded' if passphrase else '❌ MISSING'}")
+print(f"Keys loaded: Yes")
 
-if not all([api_key, api_secret, passphrase]):
-    print("❌ Missing credentials!")
-    sys.exit(1)
-
-# Try different hostnames - this fixes most 50119 errors
-configs_to_try = [
-    {},  # default
-    {'hostname': 'my.okx.com'},      # EEA / Europe
-    {'hostname': 'us.okx.com'},      # USA
-    {'hostname': 'app.okx.com'},     # Alternative US
+configs = [
+    {"name": "No demo header (most common for working bots)", 
+     "options": {'defaultType': 'spot'}},
+    
+    {"name": "Demo header only", 
+     "options": {'defaultType': 'spot', 'headers': {'x-simulated-trading': '1'}}},
+    
+    {"name": "US Region", 
+     "options": {'defaultType': 'spot'}, "hostname": "us.okx.com"},
+    
+    {"name": "EEA / my.okx", 
+     "options": {'defaultType': 'spot'}, "hostname": "my.okx.com"},
+     
+    {"name": "App OKX", 
+     "options": {'defaultType': 'spot'}, "hostname": "app.okx.com"},
 ]
 
-for i, extra in enumerate(configs_to_try):
-    print(f"\n--- Attempt {i+1} ---")
+for cfg in configs:
+    print(f"\n--- Trying: {cfg['name']} ---")
     try:
-        exchange = ccxt.okx({
+        ex = ccxt.okx({
             'apiKey': api_key,
             'secret': api_secret,
             'password': passphrase,
             'enableRateLimit': True,
-            'options': {
-                'defaultType': 'spot',
-                'headers': {'x-simulated-trading': '1'}   # Demo mode
-            },
-            **extra
+            'options': cfg["options"],
+            **({"hostname": cfg["hostname"]} if "hostname" in cfg else {})
         })
-
-        print(f"Using hostname: {extra.get('hostname', 'default')}")
-        exchange.load_markets()
-        print("✅ load_markets() successful")
-
-        balance = exchange.fetch_balance()
+        
+        ex.load_markets()
+        print("✅ load_markets() OK")
+        
+        balance = ex.fetch_balance()
         usdt = balance.get('USDT', {}).get('free', 0)
-        print(f"✅ Balance fetched! USDT: {usdt}")
-
-        ticker = exchange.fetch_ticker('DOGE/USDT')
-        print(f"✅ DOGE Price: {ticker['last']}")
-
-        print("🎉 SUCCESS! Use this config.")
+        print(f"✅ Balance OK → USDT: {usdt}")
+        
+        ticker = ex.fetch_ticker('DOGE/USDT')
+        print(f"✅ Ticker OK → Price: {ticker['last']}")
+        
+        print(f"🎉 SUCCESS with {cfg['name']}")
+        print("Use this configuration in your bot!")
         break
-
+        
     except Exception as e:
         print(f"❌ Failed: {e}")
