@@ -2,49 +2,56 @@ import ccxt
 import os
 import sys
 
-print("=== OKX API Diagnostic Test ===")
+print("=== OKX API Diagnostic Test (with regional fixes) ===")
 
 api_key = os.getenv('OKX_API_KEY')
 api_secret = os.getenv('OKX_API_SECRET')
 passphrase = os.getenv('OKX_PASSPHRASE')
 
-print(f"API Key loaded:     {'Yes' if api_key else 'MISSING'}")
-print(f"Secret loaded:      {'Yes' if api_secret else 'MISSING'}")
-print(f"Passphrase loaded:  {'Yes' if passphrase else 'MISSING'}")
+print(f"API Key:     {'✅ Loaded' if api_key else '❌ MISSING'}")
+print(f"Secret:      {'✅ Loaded' if api_secret else '❌ MISSING'}")
+print(f"Passphrase:  {'✅ Loaded' if passphrase else '❌ MISSING'}")
 
 if not all([api_key, api_secret, passphrase]):
-    print("❌ Missing credentials. Set them as environment variables.")
+    print("❌ Missing credentials!")
     sys.exit(1)
 
-exchange = ccxt.okx({
-    'apiKey': api_key,
-    'secret': api_secret,
-    'password': passphrase,
-    'enableRateLimit': True,
-    'options': {
-        'defaultType': 'spot',
-        'headers': {'x-simulated-trading': '1'}   # This is for DEMO trading
-    }
-})
+# Try different hostnames - this fixes most 50119 errors
+configs_to_try = [
+    {},  # default
+    {'hostname': 'my.okx.com'},      # EEA / Europe
+    {'hostname': 'us.okx.com'},      # USA
+    {'hostname': 'app.okx.com'},     # Alternative US
+]
 
-try:
-    print("Loading markets...")
-    exchange.load_markets()
-    print("✅ load_markets() passed")
+for i, extra in enumerate(configs_to_try):
+    print(f"\n--- Attempt {i+1} ---")
+    try:
+        exchange = ccxt.okx({
+            'apiKey': api_key,
+            'secret': api_secret,
+            'password': passphrase,
+            'enableRateLimit': True,
+            'options': {
+                'defaultType': 'spot',
+                'headers': {'x-simulated-trading': '1'}   # Demo mode
+            },
+            **extra
+        })
 
-    print("Fetching balance...")
-    balance = exchange.fetch_balance()
-    usdt = balance.get('USDT', {}).get('free', 0)
-    print(f"✅ Balance fetched successfully! USDT: {usdt}")
+        print(f"Using hostname: {extra.get('hostname', 'default')}")
+        exchange.load_markets()
+        print("✅ load_markets() successful")
 
-    print("Fetching ticker...")
-    ticker = exchange.fetch_ticker('DOGE/USDT')
-    print(f"✅ Current DOGE price: {ticker['last']}")
+        balance = exchange.fetch_balance()
+        usdt = balance.get('USDT', {}).get('free', 0)
+        print(f"✅ Balance fetched! USDT: {usdt}")
 
-    print("\n🎉 ALL TESTS PASSED - API is working!")
+        ticker = exchange.fetch_ticker('DOGE/USDT')
+        print(f"✅ DOGE Price: {ticker['last']}")
 
-except ccxt.AuthenticationError as e:
-    print(f"❌ AUTHENTICATION ERROR: {e}")
-    print("→ Check: Are you using DEMO keys? Is passphrase correct?")
-except Exception as e:
-    print(f"❌ ERROR: {type(e).__name__}: {e}")
+        print("🎉 SUCCESS! Use this config.")
+        break
+
+    except Exception as e:
+        print(f"❌ Failed: {e}")
