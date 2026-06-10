@@ -443,12 +443,19 @@ class ReactiveGridBot:
             logger.error(f"Critical error: {e}")
             log_error(str(e))
         finally:
+            # Always cancel orders when the bot stops or crashes to protect your funds
             await self.cancel_all_orders()
-            # If we stopped due to daily loss, exit with error to prevent restart loops
+            
+            # Check if we are stopping because we hit the daily loss limit
             status = get_bot_status()
             if status.get('daily_loss', 0) <= -MAX_DAILY_LOSS_USDT:
-                logger.error("Exiting due to daily loss limit. Will not auto-restart.")
-                sys.exit(1)
+                logger.error("Daily loss limit reached. Bot is now in IDLE mode.")
+                # By entering this sleep loop, the process stays alive (Exit Code 0).
+                # Coolify sees it as "Healthy" and won't force a restart.
+                while True:
+                    await asyncio.sleep(86400) 
+            else:
+                logger.info("Bot execution loop stopped.")
 
 if __name__ == "__main__":
     bot = ReactiveGridBot()
