@@ -1,8 +1,8 @@
+
 import asyncio
 import ccxt
 import os
 import logging
-import sys
 import pandas as pd
 from sqlalchemy import create_engine, text
 from datetime import datetime
@@ -40,7 +40,6 @@ MAX_DRAWDOWN_PCT = 12
 def init_db():
     try:
         with engine.connect() as conn:
-            # bot_status
             conn.execute(text("""
                 CREATE TABLE IF NOT EXISTS bot_status (
                     bot_name TEXT PRIMARY KEY,
@@ -49,8 +48,6 @@ def init_db():
                     daily_loss_limit NUMERIC DEFAULT 100
                 );
             """))
-            
-            # trades - PostgreSQL compatible
             conn.execute(text("""
                 CREATE TABLE IF NOT EXISTS trades (
                     id SERIAL PRIMARY KEY,
@@ -66,8 +63,6 @@ def init_db():
                     timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 );
             """))
-            
-            # bot_errors
             conn.execute(text("""
                 CREATE TABLE IF NOT EXISTS bot_errors (
                     id SERIAL PRIMARY KEY,
@@ -76,20 +71,16 @@ def init_db():
                     timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 );
             """))
-            
-            # Add last_reset column if not exists
             try:
                 conn.execute(text("ALTER TABLE bot_status ADD COLUMN IF NOT EXISTS last_reset TIMESTAMP"))
                 conn.commit()
             except Exception:
-                pass  # Column may already exist or not supported (SQLite)
-            
+                pass
             conn.execute(text("""
                 INSERT INTO bot_status (bot_name, status) 
                 VALUES (:name, 'RUNNING')
                 ON CONFLICT (bot_name) DO NOTHING;
             """), {"name": BOT_NAME})
-            
             conn.commit()
         logger.info("✅ Database initialized successfully")
     except Exception as e:
@@ -147,7 +138,6 @@ def log_error(msg):
 class ReactiveGridBot:
     def __init__(self):
         logger.info("=== Starting Reactive Chasing Grid Bot ===")
-
         self.exchange = ccxt.okx({
             'apiKey': os.getenv('OKX_API_KEY'),
             'secret': os.getenv('OKX_API_SECRET'),
@@ -163,7 +153,6 @@ class ReactiveGridBot:
         self.active_orders = {}
         self.running = True
         self.net_pnl = 0.0
-        self.peak_equity = None
         self.last_grid_center = None
         self.last_redeploy_time = 0
 
@@ -178,6 +167,17 @@ class ReactiveGridBot:
         df = pd.DataFrame(data, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
         df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
         return df
+
+    async def is_in_downtrend(self):
+        """Checks if price is below the 8h SMA (96 periods of 5m bars)."""
+        try:
+            df = await self.fetch_ohlcv(120)
+            sma_8h = df['close'].rolling(96).mean().iloc[-1]
+            current_price = df['close'].iloc[-1]
+            return current_price < sma_8h
+        except Exception as e:
+            logger.error(f"Error calculating trend: {e}")
+            return False
 
     async def place_order(self, side, price, amount):
         try:
@@ -195,7 +195,6 @@ class ReactiveGridBot:
         for oid in list(self.active_orders.keys()):
             try:
                 await self._run_sync(self.exchange.cancel_order, oid, SYMBOL)
-                logger.info(f"Cancelled order {oid}")
             except Exception as e:
                 logger.warning(f"Could not cancel {oid}: {e}")
         self.active_orders.clear()
@@ -204,22 +203,27 @@ class ReactiveGridBot:
         self.last_grid_center = mid_price
         self.last_redeploy_time = datetime.now().timestamp()
 
+        downtrend = await self.is_in_downtrend()
+        if downtrend:
+            logger.warning("⚠️ Downtrend detected (Price < 8h SMA). Skipping new BUY orders.")
+
         df = await self.fetch_ohlcv(80)
         atr = (df['high'] - df['low']).rolling(14).mean().iloc[-1]
         volatility = atr / mid_price
-        spacing = max(0.008, min(0.035, volatility * 2.1))
+        spacing = max(0.004, min(0.035, volatility * 1.0)) 
 
         amount = BASE_ORDER_SIZE_USDT / mid_price
-
-        logger.info(f"🔄 Deploying Reactive Grid | Center: {mid_price:.6f} | Spacing: {spacing:.4f}")
+        logger.info(f"🔄 Deploying Grid | Center: {mid_price:.6f} | TrendSafe: {not downtrend}")
 
         await self.cancel_all_orders()
 
         for i in range(1, GRID_LEVELS + 1):
             buy_price = mid_price * (1 - i * spacing)
             sell_price = mid_price * (1 + i * spacing)
-            if MIN_PRICE <= buy_price <= MAX_PRICE:
+            
+            if not downtrend and MIN_PRICE <= buy_price <= MAX_PRICE:
                 await self.place_order('buy', buy_price, amount)
+            
             if MIN_PRICE <= sell_price <= MAX_PRICE:
                 await self.place_order('sell', sell_price, amount)
 
@@ -240,9 +244,7 @@ class ReactiveGridBot:
                         self.net_pnl += trade_pnl
                         update_daily_loss(trade_pnl)
                         log_trade(BOT_NAME, 'OKX', SYMBOL, side, filled_price, amount, value, fee, oid)
-
-                        logger.info(f"✅ Filled {side.upper()} | P&L: {trade_pnl:+.2f} | Total: {self.net_pnl:+.2f}")
-
+                        logger.info(f"✅ Filled {side.upper()} | P&L: {trade_pnl:+.2f}")
                         del self.active_orders[oid]
                         await self.place_opposite_order(side, filled_price, amount)
             except Exception as e:
@@ -261,14 +263,8 @@ class ReactiveGridBot:
             await asyncio.sleep(10)
             try:
                 status = get_bot_status()
-                if status['status'] != 'RUNNING':
-                    logger.info("Bot stopped via dashboard")
-                    self.running = False
-                    break
                 if status.get('daily_loss', 0) <= -MAX_DAILY_LOSS_USDT:
-                    logger.warning("Daily loss limit reached!")
                     self.running = False
-                    break
             except Exception as e:
                 logger.warning(f"Safety monitor error: {e}")
 
@@ -277,185 +273,18 @@ class ReactiveGridBot:
             try:
                 ticker = await self.fetch_ticker()
                 current = ticker['last']
-                now = datetime.now().timestamp()
-
-                if (self.last_grid_center is None or 
-                    abs(current - self.last_grid_center) / self.last_grid_center > RECENTER_THRESHOLD_PCT) and \
-                   (now - self.last_redeploy_time > MIN_REDEPLOY_COOLDOWN):
-
-                    logger.info(f"📈 Price moved → Recentering grid at {current:.6f}")
+                if (abs(current - self.last_grid_center) / self.last_grid_center > RECENTER_THRESHOLD_PCT):
                     await self.deploy_grid(current)
-
                 await asyncio.sleep(CHECK_INTERVAL)
-            except Exception as e:
-                logger.error(f"Chase monitor error: {e}")
+            except Exception:
                 await asyncio.sleep(30)
 
-    # ====================== NEW FIXES ======================
-    def reset_daily_loss_if_new_day(self):
-        """Reset daily_loss to 0 if it's a new calendar day."""
-        try:
-            with engine.connect() as conn:
-                # Ensure last_reset column exists (already handled in init_db, but safe)
-                try:
-                    conn.execute(text("ALTER TABLE bot_status ADD COLUMN IF NOT EXISTS last_reset TIMESTAMP"))
-                    conn.commit()
-                except:
-                    pass
-                
-                row = conn.execute(
-                    text("SELECT last_reset FROM bot_status WHERE bot_name = :name"),
-                    {"name": BOT_NAME}
-                ).fetchone()
-                
-                today = datetime.now().date()
-                should_reset = False
-                if not row or row[0] is None:
-                    should_reset = True
-                else:
-                    last_reset_date = row[0].date() if isinstance(row[0], datetime) else row[0]
-                    should_reset = today > last_reset_date
-                
-                if should_reset:
-                    conn.execute(
-                        text("UPDATE bot_status SET daily_loss = 0, last_reset = CURRENT_TIMESTAMP WHERE bot_name = :name"),
-                        {"name": BOT_NAME}
-                    )
-                    conn.commit()
-                    logger.info("🔄 Daily loss reset for new day")
-        except Exception as e:
-            logger.error(f"Failed to reset daily loss: {e}")
-
-    async def fetch_account_state(self):
-        """Get current balances and open orders from exchange."""
-        try:
-            # Get spot balance
-            balance = await self._run_sync(self.exchange.fetch_balance)
-            usdt_balance = balance['USDT']['free'] if 'USDT' in balance else 0
-            doge_balance = balance['DOGE']['free'] if 'DOGE' in balance else 0
-            
-            # Get open orders
-            open_orders = await self._run_sync(self.exchange.fetch_open_orders, SYMBOL)
-            
-            logger.info(f"💰 Balance: USDT {usdt_balance:.2f}, DOGE {doge_balance:.2f}")
-            if open_orders:
-                logger.info(f"📋 Found {len(open_orders)} open orders on exchange")
-                for o in open_orders:
-                    self.active_orders[o['id']] = {
-                        'side': o['side'],
-                        'price': o['price'],
-                        'amount': o['amount']
-                    }
-            
-            return usdt_balance, doge_balance
-        except Exception as e:
-            logger.error(f"Failed to fetch account state: {e}")
-            return 0, 0
-
-    async def sync_daily_loss_from_trades(self):
-        """Recalculate daily_loss based on today's actual trades."""
-        try:
-            today_start = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
-            with engine.connect() as conn:
-                result = conn.execute(
-                    text("""
-                        SELECT COALESCE(SUM(
-                            CASE WHEN side = 'buy' THEN -value 
-                                 ELSE value 
-                            END
-                        ), 0) as total_pnl
-                        FROM trades 
-                        WHERE bot_name = :name AND timestamp >= :today
-                    """),
-                    {"name": BOT_NAME, "today": today_start}
-                )
-                row = result.fetchone()
-                actual_pnl = float(row[0]) if row else 0
-                
-                # Update database
-                conn.execute(
-                    text("UPDATE bot_status SET daily_loss = :pnl WHERE bot_name = :name"),
-                    {"pnl": actual_pnl, "name": BOT_NAME}
-                )
-                conn.commit()
-                self.net_pnl = actual_pnl
-                logger.info(f"📊 Synced daily loss to {actual_pnl:.2f} from trade history")
-                return actual_pnl
-        except Exception as e:
-            logger.error(f"Failed to sync daily loss: {e}")
-            return 0
-
     async def run(self):
-        try:
-            logger.info(f"🚀 Starting Reactive Chasing Grid Bot on {SYMBOL}")
-            init_db()
-            
-            # Reset daily loss at midnight
-            self.reset_daily_loss_if_new_day()
-            
-            # Sync actual P&L from trades
-            await self.sync_daily_loss_from_trades()
-            
-            # Check safety after sync
-            # Check safety after sync
-            status = get_bot_status()
-            if status['status'] != 'RUNNING':
-                logger.warning("Bot is STOPPED in database.")
-                return
-            
-            if status.get('daily_loss', 0) <= -MAX_DAILY_LOSS_USDT:
-                logger.error(f"Daily loss {status['daily_loss']:.2f} exceeds limit {MAX_DAILY_LOSS_USDT}. Entering IDLE mode.")
-                # Instead of crashing the container, we pause indefinitely.
-                # This keeps the container "Healthy" (exit code 0) so it doesn't restart.
-                while True:
-                    await asyncio.sleep(86400) # Sleeps for 24 hours, effectively pausing the bot
-            
-            # Fetch existing open orders and balances
-            await self.fetch_account_state()
-            
-            # If there's a grid center in active orders, recover it
-            if self.active_orders:
-                # Estimate center from first order price (simplified)
-                prices = [o['price'] for o in self.active_orders.values()]
-                if prices:
-                    mid_estimate = sum(prices) / len(prices)
-                    self.last_grid_center = mid_estimate
-                    self.last_redeploy_time = datetime.now().timestamp()
-                    logger.info(f"🔁 Recovered grid center at {mid_estimate:.6f}")
-            
-            ticker = await self.fetch_ticker()
-            
-            # Only redeploy if no active orders OR price moved significantly
-            if not self.active_orders or (self.last_grid_center and 
-                abs(ticker['last'] - self.last_grid_center) / self.last_grid_center > RECENTER_THRESHOLD_PCT):
-                await self.deploy_grid(ticker['last'])
-            else:
-                logger.info("✅ Using existing grid orders from previous session")
-            
-            await asyncio.gather(
-                self.monitor_orders(),
-                self.safety_monitor(),
-                self.chase_monitor(),
-                return_exceptions=True
-            )
-            
-        except Exception as e:
-            logger.error(f"Critical error: {e}")
-            log_error(str(e))
-        finally:
-            # Always cancel orders when the bot stops or crashes to protect your funds
-            await self.cancel_all_orders()
-            
-            # Check if we are stopping because we hit the daily loss limit
-            status = get_bot_status()
-            if status.get('daily_loss', 0) <= -MAX_DAILY_LOSS_USDT:
-                logger.error("Daily loss limit reached. Bot is now in IDLE mode.")
-                # By entering this sleep loop, the process stays alive (Exit Code 0).
-                # Coolify sees it as "Healthy" and won't force a restart.
-                while True:
-                    await asyncio.sleep(86400) 
-            else:
-                logger.info("Bot execution loop stopped.")
+        init_db()
+        await self.fetch_ohlcv()
+        ticker = await self.fetch_ticker()
+        await self.deploy_grid(ticker['last'])
+        await asyncio.gather(self.monitor_orders(), self.safety_monitor(), self.chase_monitor())
 
 if __name__ == "__main__":
     bot = ReactiveGridBot()
