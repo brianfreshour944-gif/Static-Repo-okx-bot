@@ -1,4 +1,3 @@
-
 import asyncio
 import ccxt
 import os
@@ -27,9 +26,9 @@ BASE_ORDER_SIZE_USDT = 80
 MIN_PRICE = 0.07
 MAX_PRICE = 0.14
 
-RECENTER_THRESHOLD_PCT = 0.009
+RECENTER_THRESHOLD_PCT = 0.015      # increased from 0.009 to 1.5%
 CHECK_INTERVAL = 60
-MIN_REDEPLOY_COOLDOWN = 300
+MIN_REDEPLOY_COOLDOWN = 300         # 5 minutes
 
 STOP_LOSS_AMOUNT = -80
 TAKE_PROFIT_AMOUNT = 180
@@ -168,13 +167,26 @@ class ReactiveGridBot:
         df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
         return df
 
+    async def get_balance(self, currency):
+        """Fetch free balance for a given currency (e.g., 'DOGE' or 'USDT')."""
+        try:
+            balance = await self._run_sync(self.exchange.fetch_balance)
+            return balance['free'].get(currency, 0.0)
+        except Exception as e:
+            logger.error(f"Failed to fetch balance: {e}")
+            return 0.0
+
+    # Optional: keep downtrend detection for logging only
     async def is_in_downtrend(self):
-        """Checks if price is below the 8h SMA (96 periods of 5m bars)."""
+        """Logs downtrend but does NOT block orders."""
         try:
             df = await self.fetch_ohlcv(120)
             sma_8h = df['close'].rolling(96).mean().iloc[-1]
             current_price = df['close'].iloc[-1]
-            return current_price < sma_8h
+            downtrend = current_price < sma_8h
+            if downtrend:
+                logger.info(f"📉 Price {current_price:.6f} < 8h SMA {sma_8h:.6f} (downtrend) - continuing grid")
+            return downtrend
         except Exception as e:
             logger.error(f"Error calculating trend: {e}")
             return False
@@ -200,34 +212,45 @@ class ReactiveGridBot:
         self.active_orders.clear()
 
     async def deploy_grid(self, mid_price: float):
+        """Deploys a fresh grid centered at mid_price. BUY orders are always placed."""
+        now = datetime.now().timestamp()
+        if self.last_redeploy_time and (now - self.last_redeploy_time) < MIN_REDEPLOY_COOLDOWN:
+            logger.info(f"Skipping redeploy - cooldown active ({(now - self.last_redeploy_time):.0f}s < {MIN_REDEPLOY_COOLDOWN}s)")
+            return
+
         self.last_grid_center = mid_price
-        self.last_redeploy_time = datetime.now().timestamp()
+        self.last_redeploy_time = now
 
-        downtrend = await self.is_in_downtrend()
-        if downtrend:
-            logger.warning("⚠️ Downtrend detected (Price < 8h SMA). Skipping new BUY orders.")
-
+        # Calculate volatility-based spacing
         df = await self.fetch_ohlcv(80)
         atr = (df['high'] - df['low']).rolling(14).mean().iloc[-1]
         volatility = atr / mid_price
-        spacing = max(0.004, min(0.035, volatility * 1.0)) 
+        spacing = max(0.004, min(0.035, volatility * 1.0))
 
         amount = BASE_ORDER_SIZE_USDT / mid_price
-        logger.info(f"🔄 Deploying Grid | Center: {mid_price:.6f} | TrendSafe: {not downtrend}")
+        logger.info(f"🔄 Deploying Grid | Center: {mid_price:.6f} | Spacing: {spacing:.5f} | Amount: {amount:.4f}")
 
         await self.cancel_all_orders()
+
+        # Optional: check base balance before placing SELL orders (only a warning)
+        doge_balance = await self.get_balance('DOGE')
+        if doge_balance < amount * GRID_LEVELS:
+            logger.warning(f"Low DOGE balance: {doge_balance:.2f} (need ~{amount * GRID_LEVELS:.2f}) - SELL orders might fail")
 
         for i in range(1, GRID_LEVELS + 1):
             buy_price = mid_price * (1 - i * spacing)
             sell_price = mid_price * (1 + i * spacing)
-            
-            if not downtrend and MIN_PRICE <= buy_price <= MAX_PRICE:
+
+            # Place BUY orders (always, no downtrend block)
+            if MIN_PRICE <= buy_price <= MAX_PRICE:
                 await self.place_order('buy', buy_price, amount)
-            
+
+            # Place SELL orders if within range
             if MIN_PRICE <= sell_price <= MAX_PRICE:
                 await self.place_order('sell', sell_price, amount)
 
     async def monitor_orders(self):
+        """Monitors order fills and places opposite orders."""
         while self.running:
             await asyncio.sleep(2)
             try:
@@ -244,7 +267,7 @@ class ReactiveGridBot:
                         self.net_pnl += trade_pnl
                         update_daily_loss(trade_pnl)
                         log_trade(BOT_NAME, 'OKX', SYMBOL, side, filled_price, amount, value, fee, oid)
-                        logger.info(f"✅ Filled {side.upper()} | P&L: {trade_pnl:+.2f}")
+                        logger.info(f"✅ Filled {side.upper()} | P&L: {trade_pnl:+.2f} | Net P&L: {self.net_pnl:+.2f}")
                         del self.active_orders[oid]
                         await self.place_opposite_order(side, filled_price, amount)
             except Exception as e:
@@ -256,6 +279,12 @@ class ReactiveGridBot:
         new_price = price * multiplier
         if MIN_PRICE <= new_price <= MAX_PRICE:
             new_side = 'sell' if filled_side == 'buy' else 'buy'
+            # Optional: check balance before placing opposite order
+            if new_side == 'sell':
+                doge_balance = await self.get_balance('DOGE')
+                if doge_balance < amount:
+                    logger.warning(f"Insufficient DOGE to place opposite SELL: need {amount:.4f}, have {doge_balance:.4f}")
+                    return
             await self.place_order(new_side, new_price, amount)
 
     async def safety_monitor(self):
@@ -264,27 +293,36 @@ class ReactiveGridBot:
             try:
                 status = get_bot_status()
                 if status.get('daily_loss', 0) <= -MAX_DAILY_LOSS_USDT:
+                    logger.critical(f"Daily loss limit reached ({status['daily_loss']:.2f} <= -{MAX_DAILY_LOSS_USDT}). Stopping bot.")
                     self.running = False
             except Exception as e:
                 logger.warning(f"Safety monitor error: {e}")
 
     async def chase_monitor(self):
+        """Re-centers grid when price moves significantly, respecting cooldown."""
         while self.running:
             try:
                 ticker = await self.fetch_ticker()
                 current = ticker['last']
-                if (abs(current - self.last_grid_center) / self.last_grid_center > RECENTER_THRESHOLD_PCT):
-                    await self.deploy_grid(current)
+                if self.last_grid_center is not None:
+                    move_pct = abs(current - self.last_grid_center) / self.last_grid_center
+                    if move_pct > RECENTER_THRESHOLD_PCT:
+                        logger.info(f"Price moved {move_pct:.2%} from center {self.last_grid_center:.6f} -> redeploying")
+                        await self.deploy_grid(current)
                 await asyncio.sleep(CHECK_INTERVAL)
-            except Exception:
+            except Exception as e:
+                logger.error(f"Chase monitor error: {e}")
                 await asyncio.sleep(30)
 
     async def run(self):
         init_db()
-        await self.fetch_ohlcv()
         ticker = await self.fetch_ticker()
         await self.deploy_grid(ticker['last'])
-        await asyncio.gather(self.monitor_orders(), self.safety_monitor(), self.chase_monitor())
+        await asyncio.gather(
+            self.monitor_orders(),
+            self.safety_monitor(),
+            self.chase_monitor()
+        )
 
 if __name__ == "__main__":
     bot = ReactiveGridBot()
