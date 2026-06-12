@@ -44,10 +44,13 @@ class OKXGridBot:
 
     # ---------- CORE LOGIC ----------
     def update_grid_orders(self):
-        # 1. Fetch and synchronize state
+        # 1. Refresh active orders from the exchange
         try:
             open_orders = self.exchange.fetch_open_orders(self.symbol)
-            self.active_orders = {round(float(o['price']), 8): o['id'] for o in open_orders}
+            # We build a 'current_state' dictionary from the exchange
+            current_state = {round(float(o['price']), 8): o['id'] for o in open_orders}
+            # Update our master record
+            self.active_orders = current_state
         except Exception as e:
             print(f"⚠️ Error fetching open orders: {e}")
             return
@@ -60,13 +63,16 @@ class OKXGridBot:
         
         for side, p in grid:
             p = round(p, 8) 
-            # Only place if no order exists at this price point
+            # 2. Check if the price exists in our updated master record
             if p not in self.active_orders:
                 qty = round(cost_per_trade / p, 2)
+                print(f"🚀 Attempting to place {side.upper()} order at {p:.8f}...")
                 order = self.place_single_order(side, p, qty)
+                
+                # 3. IMMEDIATELY update our local record so the next check knows it exists
                 if order:
                     self.active_orders[p] = order['id']
-                    time.sleep(0.5) # Rate limit protection
+                    time.sleep(0.5)
 
     def place_single_order(self, side, price, qty):
         try:
