@@ -28,40 +28,35 @@ class OKXGridBot:
         self.active_orders = {} 
         self.processed_order_ids = deque(maxlen=100) 
         
+        # Grid Locking Variables
+        self.last_grid_center = 0
+        self.grid_buffer = 0.005 # Only recalculate if price moves 0.5%
+        
         self.test_connection()
         self.clear_all_orders()
 
     def clear_all_orders(self):
-        """Force clear all orders for the symbol."""
         try:
-            # OKX requires the symbol and often returns a limited set
-            # We loop to ensure we catch everything
             while True:
                 open_orders = self.exchange.fetch_open_orders(self.symbol)
-                if not open_orders:
-                    break
-                print(f"🧹 Found {len(open_orders)} orders. Cancelling batch...")
+                if not open_orders: break
+                print(f"🧹 Found {len(open_orders)} orders. Clearing...")
                 for order in open_orders:
                     self.exchange.cancel_order(order['id'], self.symbol)
-                time.sleep(1) # Give exchange time to process
+                time.sleep(1)
             print("✅ All orders cleared.")
         except Exception as e:
             print(f"⚠️ Error during clear: {e}")
-
-    # Add these variables to your __init__
-    self.last_grid_center = 0
-    self.grid_buffer = 0.005 # 0.5% threshold
 
     def update_grid_orders(self):
         price = self.get_current_price()
         if not price: return
 
-        # Only update the grid if the price has moved significantly
-        price_diff = abs(price - self.last_grid_center) / self.last_grid_center
+        # Grid Locking: Only update if price moves significantly
+        price_diff = abs(price - self.last_grid_center) / (self.last_grid_center or price)
         if self.last_grid_center != 0 and price_diff < self.grid_buffer:
-            return # Skip recalculation, keep existing grid
+            return
 
-        # If we reach here, the price has moved enough to justify a new grid
         self.last_grid_center = price
         
         try:
@@ -69,38 +64,13 @@ class OKXGridBot:
             self.active_orders = {round(float(o['price']), 8): o['id'] for o in open_orders}
         except Exception as e:
             return
-
-        grid = self.calculate_grid_prices(price)
-        # ... rest of your placement logic ...
-
-    # ---------- CORE LOGIC ----------
-    def update_grid_orders(self):
-        # 1. Refresh active orders from the exchange
-        try:
-            open_orders = self.exchange.fetch_open_orders(self.symbol)
-            # We build a 'current_state' dictionary from the exchange
-            current_state = {round(float(o['price']), 8): o['id'] for o in open_orders}
-            # Update our master record
-            self.active_orders = current_state
-        except Exception as e:
-            print(f"⚠️ Error fetching open orders: {e}")
-            return
-        
-        price = self.get_current_price()
-        if not price: return
         
         grid = self.calculate_grid_prices(price)
-        cost_per_trade = 33.33 
-        
         for side, p in grid:
-            p = round(p, 8) 
-            # 2. Check if the price exists in our updated master record
+            p = round(p, 8)
             if p not in self.active_orders:
-                qty = round(cost_per_trade / p, 2)
-                print(f"🚀 Attempting to place {side.upper()} order at {p:.8f}...")
+                qty = round(33.33 / p, 2)
                 order = self.place_single_order(side, p, qty)
-                
-                # 3. IMMEDIATELY update our local record so the next check knows it exists
                 if order:
                     self.active_orders[p] = order['id']
                     time.sleep(0.5)
@@ -125,10 +95,8 @@ class OKXGridBot:
                 if order['id'] not in self.processed_order_ids:
                     self.processed_order_ids.append(order['id'])
                     price, qty, side = float(order['price']), float(order['amount']), order['side']
-                    
                     self.log_trade_to_postgres(side.upper(), price, qty, order['id'], float(order.get('fee', {}).get('cost', 0.0)))
                     
-                    # Replenishment
                     new_side = 'sell' if side == 'buy' else 'buy'
                     offset = self.grid_step_percent / 100
                     new_price = round(price * (1 + offset), 8) if side == 'buy' else round(price * (1 - offset), 8)
@@ -137,7 +105,7 @@ class OKXGridBot:
         except Exception as e:
             self.log_error_to_db(f"Sync error: {e}")
 
-    # ---------- HELPERS ----------
+    # --- Database and Helpers ---
     def log_error_to_db(self, error_msg):
         db_url = os.getenv('DATABASE_URL')
         if not db_url: return
@@ -146,8 +114,7 @@ class OKXGridBot:
                 with conn.cursor() as cur:
                     cur.execute("INSERT INTO bot_errors (bot_name, error_message) VALUES (%s, %s)", (self.bot_name, str(error_msg)))
                     conn.commit()
-        except Exception as e:
-            print(f"❌ Failed to log error: {e}")
+        except: pass
 
     def log_trade_to_postgres(self, side, price, qty, order_id, fee):
         db_url = os.getenv('DATABASE_URL')
@@ -158,8 +125,7 @@ class OKXGridBot:
                     cur.execute("INSERT INTO trades (bot_name, exchange, symbol, side, price, quantity, value, fee, order_id, timestamp) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())", 
                                 (self.bot_name, "OKX", self.symbol, side, price, qty, (price * qty), fee, order_id))
                     conn.commit()
-        except Exception as e:
-            self.log_error_to_db(f"Trade log error: {e}")
+        except: pass
 
     def check_status(self):
         db_url = os.getenv('DATABASE_URL')
@@ -170,14 +136,11 @@ class OKXGridBot:
                     cur.execute("SELECT status FROM bot_status WHERE bot_name = %s", (self.bot_name,))
                     row = cur.fetchone()
                     if row and row[0] == 'STOP': exit(0)
-        except Exception as e:
-            self.log_error_to_db(f"Status check error: {e}")
+        except: pass
 
     def get_current_price(self):
         try: return self.exchange.fetch_ticker(self.symbol)['last']
-        except Exception as e:
-            self.log_error_to_db(f"Price fetch error: {e}")
-            return None
+        except: return None
 
     def calculate_grid_prices(self, center_price):
         grid_prices = []
@@ -189,11 +152,11 @@ class OKXGridBot:
     def test_connection(self):
         try: print(f"✅ Connected! USDT balance: {self.exchange.fetch_balance().get('USDT', {}).get('free', 0):.2f}")
         except Exception as e:
-            self.log_error_to_db(f"Connection failed: {e}")
+            print(f"❌ Connection failed: {e}")
             raise
 
     def run(self):
-        print(f"🤖 {self.bot_name} - Event-Driven Grid Bot Started")
+        print(f"🤖 {self.bot_name} - Grid Bot Started")
         while True:
             self.check_status()
             self.update_grid_orders()
