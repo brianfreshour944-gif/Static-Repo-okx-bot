@@ -48,34 +48,30 @@ class OKXGridBot:
         except Exception as e:
             print(f"⚠️ Error during clear: {e}")
 
+    # Add these variables to your __init__
+    self.last_grid_center = 0
+    self.grid_buffer = 0.005 # 0.5% threshold
+
     def update_grid_orders(self):
-        # 1. Fetch current live state
+        price = self.get_current_price()
+        if not price: return
+
+        # Only update the grid if the price has moved significantly
+        price_diff = abs(price - self.last_grid_center) / self.last_grid_center
+        if self.last_grid_center != 0 and price_diff < self.grid_buffer:
+            return # Skip recalculation, keep existing grid
+
+        # If we reach here, the price has moved enough to justify a new grid
+        self.last_grid_center = price
+        
         try:
             open_orders = self.exchange.fetch_open_orders(self.symbol)
-            # IMPORTANT: We ONLY care about orders the BOT placed
-            # If you have manual orders, this logic might conflict
             self.active_orders = {round(float(o['price']), 8): o['id'] for o in open_orders}
         except Exception as e:
             return
-        
-        price = self.get_current_price()
-        if not price: return
-        
+
         grid = self.calculate_grid_prices(price)
-        
-        for side, p in grid:
-            p = round(p, 8)
-            # Check if this specific price point is occupied
-            if p not in self.active_orders:
-                qty = round(33.33 / p, 2)
-                # Before placing, check if we have too many orders total
-                if len(self.active_orders) < 50: 
-                    order = self.place_single_order(side, p, qty)
-                    if order:
-                        self.active_orders[p] = order['id']
-                        time.sleep(0.5)
-                else:
-                    print("⚠️ Order limit reached, skipping...")
+        # ... rest of your placement logic ...
 
     # ---------- CORE LOGIC ----------
     def update_grid_orders(self):
