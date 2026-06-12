@@ -102,19 +102,22 @@ class OKXGridBot:
 
     # ---------- GRID LOGIC UPDATES ----------
 
-    def update_grid_orders(self):
-        price = self.get_current_price()
-        if not price: return
-        grid = self.calculate_grid_prices(price)
-        
-        # FIXED COST PER TRADE
-        cost_per_trade = 33.33 
-        
-        for side, p in grid:
-            # Calculate quantity based on $33.33 fixed cost
-            qty = round(cost_per_trade / p, 2)
-            self.place_single_order(side, p, qty)
-        print(f"🌐 Initial grid populated around {price:.8f} with $33.33 per order")
+    # Add a dictionary to track active orders
+self.active_orders = {} # Format: {price: order_id}
+
+def update_grid_orders(self):
+    # 1. Fetch current open orders from OKX
+    open_orders = self.exchange.fetch_open_orders(self.symbol)
+    self.active_orders = {float(o['price']): o['id'] for o in open_orders}
+    
+    # 2. Only place orders if they are NOT in self.active_orders
+    grid = self.calculate_grid_prices(self.get_current_price())
+    for side, p in grid:
+        if p not in self.active_orders:
+            qty = round(33.33 / p, 2)
+            order = self.place_single_order(side, p, qty)
+            if order:
+                self.active_orders[p] = order['id']
 
     def sync_filled_orders(self):
         try:
