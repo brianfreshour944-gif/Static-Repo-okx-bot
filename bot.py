@@ -10,6 +10,7 @@ load_dotenv()
 
 class OKXGridBot:
     def __init__(self):
+        # Initialize the exchange
         self.exchange = ccxt.okx({
             'apiKey': os.getenv('OKX_API_KEY'),
             'secret': os.getenv('OKX_API_SECRET'),
@@ -25,15 +26,24 @@ class OKXGridBot:
         self.grid_levels = 3
         self.grid_step_percent = 4.0
         
-        # Track active orders to prevent the 3000-order limit error
-        self.active_orders = {} 
+        # State management
+        self.active_orders = {} # {price: order_id}
         self.processed_order_ids = deque(maxlen=100) 
         
         self.test_connection()
-        # Clear old orders on startup to ensure a clean grid
+        
+        # Clean up existing orders on startup
+        self.clear_all_orders()
+
+    def clear_all_orders(self):
+        """Manually fetch and cancel all open orders to ensure a clean start."""
         try:
-            self.exchange.cancel_all_orders(self.symbol)
-            print("🧹 Cleared all existing orders on startup.")
+            open_orders = self.exchange.fetch_open_orders(self.symbol)
+            if open_orders:
+                print(f"🧹 Found {len(open_orders)} open orders. Cancelling...")
+                for order in open_orders:
+                    self.exchange.cancel_order(order['id'], self.symbol)
+                print("✅ All previous orders cleared.")
         except Exception as e:
             print(f"⚠️ Could not clear orders: {e}")
 
@@ -107,7 +117,7 @@ class OKXGridBot:
             return None
 
     def update_grid_orders(self):
-        # Fetch current open orders to prevent duplicates
+        # Refresh active orders list
         open_orders = self.exchange.fetch_open_orders(self.symbol)
         self.active_orders = {float(o['price']): o['id'] for o in open_orders}
         
@@ -135,13 +145,13 @@ class OKXGridBot:
                     fee = float(order.get('fee', {}).get('cost', 0.0))
                     self.log_trade_to_postgres(side.upper(), price, qty, order['id'], fee)
                     
-                    # Replenishment Logic
+                    # Replenishment
                     new_side = 'sell' if side == 'buy' else 'buy'
                     offset = self.grid_step_percent / 100
                     new_price = round(price * (1 + offset), 8) if side == 'buy' else round(price * (1 - offset), 8)
                     self.place_single_order(new_side, new_price, qty)
                     
-                    # Remove from active tracking
+                    # Remove from active tracking so the update loop sees the spot is empty
                     self.active_orders.pop(price, None)
         except Exception as e:
             self.log_error_to_db(f"Sync error: {e}")
