@@ -1,4 +1,4 @@
- #!/usr/bin/env python3
+#!/usr/bin/env python3
 import os
 import time
 import ccxt
@@ -38,6 +38,7 @@ class OKXGridBot:
 
         self.active_orders       = {}          # price -> order_id
         self.processed_order_ids = deque(maxlen=200)
+        self.start_time = time.time()  # ignore fills before this timestamp
         self.last_grid_center    = 0.0
 
         self.test_connection()
@@ -152,6 +153,12 @@ class OKXGridBot:
         for order in orders:
             oid = order['id']
             if oid in self.processed_order_ids:
+                continue
+
+            # Ignore fills that happened before this bot session started
+            fill_time = order.get('timestamp', 0)
+            if fill_time and (fill_time / 1000) < self.start_time:
+                self.processed_order_ids.append(oid)  # mark seen so we never revisit
                 continue
 
             # Only handle fully-filled orders
