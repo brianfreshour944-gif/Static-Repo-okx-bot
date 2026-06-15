@@ -273,24 +273,37 @@ class ReactiveGridBot:
             await asyncio.sleep(2)
             try:
                 for oid in list(self.active_orders.keys()):
-                    order = await self._run_sync(
-                        self.exchange.fetch_order, oid, SYMBOL)
+                    order = await self._run_sync(self.exchange.fetch_order, oid, SYMBOL)
                     if order.get('status') == 'closed' and oid in self.active_orders:
                         filled_price = float(order.get('average') or order.get('price'))
-                        amount       = float(order.get('filled'))
-                        side         = order['side']
-                        fee          = float(
-                            order.get('fee', {}).get('cost', 0)
-                            if order.get('fee') else 0)
-                        value     = amount * filled_price
-                        trade_pnl = (-value - fee) if side == 'buy' else (value - fee)
-
-                        self.net_pnl += trade_pnl
-                        log_trade(BOT_NAME, 'OKX', SYMBOL, side,
-                                  filled_price, amount, value, fee, oid)
-                        logger.info(
-                            f"✅ Filled {side.upper()} | "
-                            f"P&L: {trade_pnl:+.2f} | Net P&L: {self.net_pnl:+.2f}")
+                        amount = float(order.get('filled'))
+                        side = order['side']
+                        fee = float(order.get('fee', {}).get('cost', 0) if order.get('fee') else 0)
+                        value = amount * filled_price
+                        
+                        # --- NEW: CALCULATE REALIZED P&L FROM DB ---
+                        realized_pnl = 0.0
+                        if side == 'sell':
+                            with engine.connect() as conn:
+                                # Fetch the last buy price to calculate profit on this specific sell
+                                res = conn.execute(text("""
+                                    SELECT price FROM trades 
+                                    WHERE symbol = :sym AND side = 'buy' 
+                                    ORDER BY timestamp DESC LIMIT 1
+                                """), {"sym": SYMBOL})
+                                last_buy = res.fetchone()
+                                if last_buy:
+                                    buy_price = float(last_buy[0])
+                                    realized_pnl = (filled_price - buy_price) * amount
+                        
+                        # Log to DB (include realized_pnl if your table supports it, 
+                        # otherwise just use your existing log_trade function)
+                        log_trade(BOT_NAME, 'OKX', SYMBOL, side, filled_price, amount, value, fee, oid)
+                        
+                        # Update memory P&L
+                        self.net_pnl += realized_pnl
+                        
+                        logger.info(f"✅ Filled {side.upper()} | Realized P&L: {realized_pnl:+.2f}")
                         del self.active_orders[oid]
                         await self.place_opposite_order(side, filled_price, amount)
             except Exception as e:
