@@ -1,0 +1,71 @@
+"""
+FILE: exchange.py
+FUNCTION: Manages raw OKX exchange connections and direct order placements.
+"""
+import os
+import logging
+import asyncio
+import ccxt
+
+logger = logging.getLogger("ReactiveGridBot.Exchange")
+
+class OKXExchangeManager:
+    def __init__(self, symbol):
+        self.symbol = symbol
+        logger.info("Initializing connection parameters for OKX API...")
+        
+        # Instantiate CCXT connection wrapper instance
+        self.exchange = ccxt.okx({
+            'apiKey':     os.getenv('OKX_API_KEY'),
+            'secret':     os.getenv('OKX_API_SECRET'),
+            'password':   os.getenv('OKX_PASSPHRASE'),
+            'enableRateLimit': True,
+            'hostname':   'app.okx.com',
+            'options':    {'defaultType': 'spot', 'x-simulated-trading': '1'},
+        })
+        self.exchange.set_sandbox_mode(True)
+        
+    async def _run_sync(self, func, *args, **kwargs):
+        """Helper to run synchronous CCXT network tasks in an async loop."""
+        return await asyncio.to_thread(func, *args, **kwargs)
+
+    async def fetch_ticker(self):
+        """Queries current market price ticks."""
+        return await self._run_sync(self.exchange.fetch_ticker, self.symbol)
+
+    async def get_balance(self, currency):
+        """Retrieves currently unreserved free capital wallet limits."""
+        try:
+            balance = await self._run_sync(self.exchange.fetch_balance)
+            return balance['free'].get(currency, 0.0)
+        except Exception as e:
+            logger.error(f"Failed to fetch exchange wallet balance for {currency}: {e}")
+            return 0.0
+
+    async def place_limit_order(self, side, price, amount):
+        """Places a single raw spot order utilizing strict post-only protocols."""
+        try:
+            params = {'postOnly': True}
+            order = await self._run_sync(self.exchange.create_order, self.symbol, 'limit', side, amount, price, params)
+            logger.info(f"✅ Placed {side.upper()} limit order via exchange API: {amount:.4f} @ ${price:.5f}")
+            return order
+        except Exception as e:
+            logger.error(f"Failed creating exchange limit order footprint: {e}")
+            return None
+
+    async def fetch_order_status(self, order_id):
+        """Fetches the latest tracking payload for an individual order ID."""
+        try:
+            return await self._run_sync(self.exchange.fetch_order, order_id, self.symbol)
+        except Exception as e:
+            logger.error(f"Failed gathering current state tracking for transaction token {order_id}: {e}")
+            return None
+
+    async def cancel_single_order(self, order_id):
+        """Attempts to cancel a single standing order ID."""
+        try:
+            await self._run_sync(self.exchange.cancel_order, order_id, self.symbol)
+            return True
+        except Exception as e:
+            logger.warning(f"Order cancellation adjustment failed for token {order_id}: {e}")
+            return False
