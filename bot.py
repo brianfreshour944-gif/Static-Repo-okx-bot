@@ -3,6 +3,7 @@ import ccxt
 import os
 import logging
 import pandas as pd
+from exchange_okx import ExchangeManager
 from sqlalchemy import create_engine, text
 from datetime import datetime, timedelta
 
