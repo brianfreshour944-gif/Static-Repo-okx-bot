@@ -10,8 +10,14 @@ from datetime import datetime
 logger = logging.getLogger("ReactiveGridBot.Database")
 
 DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
-if DATABASE_URL and "psycopg2" in DATABASE_URL:
-    DATABASE_URL = DATABASE_URL.replace("postgresql+psycopg2://", "postgresql://")
+
+# 1. Normalize database dialect strings for SQLAlchemy 2.0+ compatibility
+if DATABASE_URL.startswith("postgres://"):
+    DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
+elif DATABASE_URL.startswith("postgresql+psycopg2://"):
+    DATABASE_URL = DATABASE_URL.replace("postgresql+psycopg2://", "postgresql://", 1)
+
+# Fallback to local SQLite if no cloud database environment variable is active
 if not DATABASE_URL:
     DATABASE_URL = "sqlite:///grid_bot.db"
 
@@ -20,6 +26,9 @@ engine = create_engine(DATABASE_URL, echo=False, pool_pre_ping=True)
 
 def init_db(bot_name, session_start_time):
     """Initializes standard logging tables safely."""
+    # Handle auto-increment syntax variations between Postgres (SERIAL) and SQLite (AUTOINCREMENT)
+    id_column_type = "INTEGER PRIMARY KEY AUTOINCREMENT" if "sqlite" in DATABASE_URL else "SERIAL PRIMARY KEY"
+    
     try:
         with engine.connect() as conn:
             conn.execute(text("""
@@ -30,9 +39,11 @@ def init_db(bot_name, session_start_time):
                     session_start_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             """))
-            conn.execute(text("""
+            
+            # Use the dynamically selected primary key identity token
+            conn.execute(text(f"""
                 CREATE TABLE IF NOT EXISTS trades (
-                    id SERIAL PRIMARY KEY,
+                    id {id_column_type},
                     bot_name TEXT,
                     exchange TEXT,
                     symbol TEXT,
@@ -45,6 +56,7 @@ def init_db(bot_name, session_start_time):
                     timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             """))
+            
             conn.execute(text("""
                 INSERT INTO bot_status (bot_name, status, session_start_time)
                 VALUES (:name, 'RUNNING', :start)
