@@ -82,6 +82,8 @@ def log_trade(bot_name, symbol, side, price, quantity, value, fee, order_id):
     except Exception as e:
         logger.error(f"Failed logging trade transaction to storage records: {e}")
 
+# ... (your existing get_daily_loss_today function) ...
+
 def get_daily_loss_today(bot_name) -> float:
     """Calculates cumulative session earnings directly from trades table."""
     try:
@@ -96,3 +98,39 @@ def get_daily_loss_today(bot_name) -> float:
     except Exception as e:
         logger.error(f"Error reading historical session P&L limits: {e}")
         return 0.0
+
+# ==================== PASTE THE NEW FUNCTION RIGHT HERE ====================
+def update_status(bot_name, status):
+    """Update the bot's heartbeat (last_update) and status; insert if missing."""
+    try:
+        with engine.connect() as conn:
+            # 1. Ensure the last_update column exists (safe migration)
+            conn.execute(text("""
+                DO $$ 
+                BEGIN 
+                    IF NOT EXISTS (SELECT 1 FROM information_schema.columns 
+                                   WHERE table_name='bot_status' AND column_name='last_update') 
+                    THEN
+                        ALTER TABLE bot_status ADD COLUMN last_update TIMESTAMP DEFAULT CURRENT_TIMESTAMP;
+                    END IF;
+                END $$;
+            """))
+            conn.commit()
+
+            # 2. Upsert: update if exists, else insert
+            result = conn.execute(text("""
+                UPDATE bot_status 
+                SET status = :status, last_update = CURRENT_TIMESTAMP 
+                WHERE bot_name = :name
+            """), {"name": bot_name, "status": status})
+            
+            if result.rowcount == 0:
+                # Insert new row with default values
+                conn.execute(text("""
+                    INSERT INTO bot_status (bot_name, status, last_update, session_start_time)
+                    VALUES (:name, :status, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                """), {"name": bot_name, "status": status})
+            
+            conn.commit()
+    except Exception as e:
+        logger.error(f"Failed to update status for {bot_name}: {e}")
