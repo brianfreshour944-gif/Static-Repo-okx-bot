@@ -1,18 +1,12 @@
-"""
-FILE: main.py
-FUNCTION: Core entry point application controller script.
-"""
 import asyncio
 import logging
 from datetime import datetime
 import database as db
 from engine import ReactiveGridEngine
 
-# Initialize professional log formats
 logging.basicConfig(level=logging.INFO, format='%(asctime)s | %(levelname)s | %(message)s')
 logger = logging.getLogger("ReactiveGridBot.Main")
 
-# ====================== PARAMETER DEFINITIONS ======================
 BOT_NAME               = "Static-Repo-okx-bot"
 SYMBOL                 = "DOGE/USDT"
 GRID_LEVELS            = 6
@@ -23,17 +17,24 @@ RECENTER_THRESHOLD_PCT = 0.015
 
 SESSION_START_TIME = datetime.utcnow()
 
+# ===== NEW HEARTBEAT FUNCTION =====
+async def heartbeat_loop():
+    """Periodically update the bot's status in the database."""
+    while True:
+        try:
+            db.update_status(BOT_NAME, 'RUNNING')
+        except Exception as e:
+            logger.error(f"Heartbeat update failed: {e}")
+        await asyncio.sleep(10)
+
 async def main():
     logger.info("Initializing system node protocols...")
     
-    # 1. Initialize relational data schemas safely
     db.init_db(BOT_NAME, SESSION_START_TIME)
     
-    # 2. Check current session status safety criteria before execution
     daily_loss = db.get_daily_loss_today(BOT_NAME)
     logger.info(f"Session accounting check complete | Live Session P&L: ${daily_loss:+.2f}")
     
-    # 3. Instantiate core grid engine instance
     bot = ReactiveGridEngine(
         bot_name=BOT_NAME,
         symbol=SYMBOL,
@@ -44,16 +45,15 @@ async def main():
         recenter_threshold=RECENTER_THRESHOLD_PCT
     )
     
-    # 4. Fetch initial index parameters to establish starting grid lines
     ticker = await bot.ex.fetch_ticker()
     initial_price = float(ticker['last'])
     await bot.deploy_grid(initial_price)
     
-    # 5. Launch simultaneous background tasks processing loops cleanly
     logger.info("Firing up processing monitors...")
     await asyncio.gather(
         bot.monitor_orders_loop(),
         bot.chase_monitor_loop(),
+        heartbeat_loop(),          # <-- ADD THIS
         return_exceptions=True
     )
 
