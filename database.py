@@ -39,6 +39,14 @@ def init_db(bot_name, session_start_time):
                     session_start_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             """))
+            # bot_status is shared across multiple bots -- it may already
+            # exist (created by another bot) without these columns, so
+            # CREATE TABLE IF NOT EXISTS alone won't add them.
+            conn.execute(text("ALTER TABLE bot_status ADD COLUMN IF NOT EXISTS daily_loss_limit NUMERIC DEFAULT 150"))
+            conn.execute(text("ALTER TABLE bot_status ADD COLUMN IF NOT EXISTS session_start_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP"))
+            conn.execute(text("ALTER TABLE bot_status ADD COLUMN IF NOT EXISTS starting_equity NUMERIC"))
+            conn.execute(text("ALTER TABLE bot_status ADD COLUMN IF NOT EXISTS live_equity NUMERIC"))
+            conn.execute(text("ALTER TABLE bot_status ADD COLUMN IF NOT EXISTS live_equity_updated_at TIMESTAMP"))
             
             # Use the dynamically selected primary key identity token
             conn.execute(text(f"""
@@ -134,3 +142,52 @@ def update_status(bot_name, status):
             conn.commit()
     except Exception as e:
         logger.error(f"Failed to update status for {bot_name}: {e}")
+
+
+def report_equity(bot_name, current_equity):
+    """
+    Reports this bot's real account equity to the dashboard.
+    starting_equity is set the first time a bot reports in and is never
+    overwritten afterward. live_equity and live_equity_updated_at are
+    overwritten on every call.
+    """
+    try:
+        with engine.connect() as conn:
+            conn.execute(text("""
+                INSERT INTO bot_status (bot_name, starting_equity, live_equity, live_equity_updated_at, last_update)
+                VALUES (:name, :equity, :equity, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                ON CONFLICT (bot_name) DO UPDATE SET
+                    live_equity = :equity,
+                    live_equity_updated_at = CURRENT_TIMESTAMP,
+                    last_update = CURRENT_TIMESTAMP,
+                    starting_equity = COALESCE(bot_status.starting_equity, :equity)
+            """), {"name": bot_name, "equity": float(current_equity)})
+            conn.commit()
+    except Exception as e:
+        logger.error(f"report_equity failed for {bot_name}: {e}")
+
+
+def check_drawdown_halted(bot_name, max_drawdown_pct=10.0):
+    """
+    Lightweight drawdown safety check: compares live_equity against
+    starting_equity and returns True if the loss exceeds max_drawdown_pct.
+    Does not halt anything itself -- main.py decides what to do with the
+    result. Returns False (not halted) if either value is missing, since
+    we can't compute a drawdown without both.
+    """
+    try:
+        with engine.connect() as conn:
+            result = conn.execute(text("""
+                SELECT starting_equity, live_equity FROM bot_status WHERE bot_name = :name
+            """), {"name": bot_name})
+            row = result.fetchone()
+            if not row or row[0] is None or row[1] is None:
+                return False, 0.0
+            starting, live = float(row[0]), float(row[1])
+            if starting <= 0:
+                return False, 0.0
+            drawdown_pct = (live - starting) / starting * 100
+            return drawdown_pct < -abs(max_drawdown_pct), drawdown_pct
+    except Exception as e:
+        logger.error(f"check_drawdown_halted failed for {bot_name}: {e}")
+        return False, 0.0
