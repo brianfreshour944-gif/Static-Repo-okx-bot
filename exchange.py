@@ -42,6 +42,31 @@ class OKXExchangeManager:
             logger.error(f"Failed to fetch exchange wallet balance for {currency}: {e}")
             return 0.0
 
+    async def get_total_equity_usdt(self):
+        """
+        Returns total account equity in USDT terms -- cash AND the current
+        market value of any held crypto (e.g. DOGE this bot is holding),
+        using OKX's own totalEq figure rather than summing free balances,
+        which would miss inventory value entirely.
+
+        NOTE: this account is in OKX sandbox/demo mode (see __init__) --
+        the number returned here is demo money, not real funds.
+        """
+        try:
+            balance = await self._run_sync(self.exchange.fetch_balance)
+            data = balance.get('info', {}).get('data', [])
+            if data and data[0].get('totalEq'):
+                return float(data[0]['totalEq'])
+            # Fallback: sum eqUsd across all currency details
+            total = 0.0
+            for d in data:
+                for detail in d.get('details', []):
+                    total += float(detail.get('eqUsd', 0) or 0)
+            return total
+        except Exception as e:
+            logger.error(f"Failed to fetch total equity: {e}")
+            return 0.0
+
     async def place_limit_order(self, side, price, amount):
         """Places a single raw spot order utilizing strict post-only protocols."""
         try:
